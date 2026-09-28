@@ -94,33 +94,43 @@ class Ups {
                const std::function<void(const Status&)>& callback,
                std::atomic<bool>& stop_flag);
 
-  // --- High-level serial commands (High-confidence recovered literals) ---
-  // All of these are serial-only. HID devices return Error::NotSupported.
-  // Response (if any) is discarded unless noted; use transact() for raw I/O.
+  // --- High-level commands ---
+  // Serial: recovered CR-framed literals (B\r, T\r, …).
+  // HID: Power Device usages 0x84/0x5A (alarm) and 0x84/0x58 (test), via
+  // IOHIDDeviceSetValue (Feature reports on PID 0x0601: alarm id 0x0C, test 0x14).
 
-  // Quick battery / self-test: "T\r" (v2e, titan). High.
+  // Quick battery / self-test. Serial "T\r"; HID Test(1).
   Error self_test();
 
-  // Cancel battery / self-test: "CT\r" (v1, v2e, titan). High.
+  // Cancel battery / self-test. Serial "CT\r"; HID Test(3).
   Error cancel_test();
 
-  // Toggle audible alarm: "B\r" (v1). High.
+  // Audible alarm helpers (HID Feature 0x84/0x5A). Serial falls back:
+  // toggle_buzzer uses "B\r"; enable/disable/mute are HID-oriented and return
+  // NotSupported on serial unless a text equivalent exists.
+  Error enable_alarm();   // HID value 2
+  Error disable_alarm();  // HID value 1
+  Error mute_alarm();     // HID value 3
+
+  // Best-effort toggle: HID mutes when enabled (2), otherwise enables (2).
+  // Serial: "B\r" (v1). High for serial literal; Medium for HID policy.
   Error toggle_buzzer();
 
-  // Rating / form factor query: "F\r" (v1, titan). High.
+  // Rating / form factor query: "F\r" (v1, titan). High. Serial only.
   // On success, `response` holds the device reply (including trailing CR).
   Error read_rating(std::string& response);
 
-  // Cancel pending schedule: "C\r" (v2e, titan). High.
+  // Cancel pending schedule: "C\r" (v2e, titan). High. Serial only.
   Error cancel_schedule();
 
-  // Battery calibration: "TL\r" (v2e, titan). High.
+  // Battery calibration. Serial "TL\r" (v2e, titan). High.
+  // HID: no separate TL — maps to Test(2) deep/battery test (Medium).
   Error calibrate();
 
-  // Indicator / front-panel LED test: "TI\r" (v2e). High.
+  // Indicator / front-panel LED test: "TI\r" (v2e). High. Serial only.
   Error indicator_test();
 
-  // Buzzer test: "TB\r" (v2e). High.
+  // Buzzer test: "TB\r" (v2e). High. Serial only.
   Error buzzer_test();
 
   // Serial only. `command` may already end in CR; otherwise CR is appended

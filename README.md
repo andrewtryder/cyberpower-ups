@@ -2,12 +2,13 @@
 
 A modern C++17 library and command-line tool for talking to CyberPower UPS devices over **USB HID** and **serial**.
 
-The wire protocol was recovered by static analysis of PowerPanel Personal’s native driver (`libppbedrvc.dylib`). This library does **not** link or depend on that dylib — it speaks to the hardware directly.
+## Why this project exists
 
-- Works today on **macOS** (IOKit HID + termios)
-- Windows / Linux builds compile against a transport stub (platform layer is isolated)
-- Clean public C++ and C APIs so you can use it from other applications
-- Direct device access only (no network / TCP/IP card required)
+Official **PowerPanel Personal** ships a native driver, `libppbedrvc.dylib`, that is **x86_64-only** — not a native Apple Silicon / arm64 binary. On Apple Silicon Macs that forces Rosetta (or leaves you without a clean native stack) for direct USB HID and serial access to the UPS.
+
+**cyberpower-ups** was built by reverse-engineering that driver so there is a **native C++17 library and CLI** that talks to the hardware directly: no dependency on the proprietary dylib, and no Rosetta required for this code path. It works today on macOS (IOKit HID + termios); Windows / Linux builds compile against a transport stub while the platform layer stays isolated.
+
+This project is independent and **not affiliated with** Cyber Power Systems. See [License & Disclaimer](#license--disclaimer).
 
 For protocol internals, recovered constants, and confidence annotations, see **[PROTOCOL.md](PROTOCOL.md)**.
 
@@ -17,15 +18,40 @@ For protocol internals, recovered constants, and confidence annotations, see **[
 
 - Device discovery (USB HID + serial ports)
 - Status polling (voltage, load, battery %, runtime, AC present, and more)
-- High-level serial commands (self-test, cancel test, toggle buzzer, rating, …)
+- High-level commands on HID and/or serial (self-test, cancel test, alarm control, calibrate, …)
 - Polling monitor API (`Ups::monitor`) and `cpups --monitor`
-- JSON output via the `cpups` CLI
+- JSON output and `--dump-raw` capture via the `cpups` CLI
 - Recovered text protocol (v1 / v2e / titan) and v3 binary framing
-- HID Power Device / Battery usage support
+- HID Power Device / Battery status usages and alarm/test Feature controls (e.g. PID `0x0601`)
 
 ---
 
 ## Quick Start
+
+CMake is the real build system. A top-level **Makefile** is a thin convenience wrapper.
+
+### With Make
+
+```bash
+make                 # configure + Release build in ./build
+make test            # ctest + ./build/cpups --self-test (no UPS required)
+make run             # ./build/cpups
+make run ARGS='--json'
+make monitor         # ./build/cpups --monitor
+make install         # cmake --install (PREFIX=/usr/local by default)
+make help            # list targets and overrides
+```
+
+Overridable variables: `BUILD_TYPE` (default `Release`), `PREFIX` (default `/usr/local`), `ARGS` (extra `cpups` flags for `run` / `monitor` / `json`).
+
+```bash
+make BUILD_TYPE=Debug
+make install PREFIX=/opt/local
+make clean           # remove build artifacts; keep ./build
+make distclean       # delete ./build
+```
+
+### With CMake directly
 
 ```bash
 cmake -S . -B build
@@ -46,15 +72,16 @@ cmake --build build
 ./build/cpups --monitor --json          # JSON lines on change
 ./build/cpups --monitor --every-poll    # print every sample
 
-# Device commands (first UPS; serial; HID returns NotSupported)
-./build/cpups --test                    # or --self-test-device
+# Device commands (first UPS; see HID vs serial below)
+./build/cpups --test                    # quick self-test (HID+serial)
 ./build/cpups --cancel-test
-./build/cpups --buzzer                  # or --beep
-./build/cpups --rating
-./build/cpups --cancel-schedule
-./build/cpups --calibrate
-./build/cpups --indicator-test
-./build/cpups --buzzer-test
+./build/cpups --buzzer                  # toggle alarm (HID+serial)
+./build/cpups --mute                    # HID Feature mute
+./build/cpups --calibrate               # serial TL, or HID deep Test(2)
+./build/cpups --rating                  # serial only
+./build/cpups --cancel-schedule         # serial only
+./build/cpups --indicator-test          # serial only
+./build/cpups --buzzer-test             # serial only
 ./build/cpups --rating --json
 
 # Capture raw HID reports / serial lines to stderr
@@ -67,6 +94,8 @@ cmake --build build
 ### Install
 
 ```bash
+make install
+# or:
 cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr/local
 cmake --build build
 cmake --install build
@@ -79,6 +108,30 @@ This installs:
 - the `cpups` binary
 - CMake package config under `lib/cmake/cyberpower-ups/`
 - pkg-config file `lib/pkgconfig/cyberpower-ups.pc`
+
+---
+
+## HID vs serial controls
+
+Status reads work on both transports. Control commands differ:
+
+| Command | HID | Serial |
+| --- | --- | --- |
+| `--test` / `self_test()` | Test(1) Feature write | `T\r` |
+| `--cancel-test` / `cancel_test()` | Test(3) | `CT\r` |
+| `--buzzer` / `toggle_buzzer()` | mute if enabled, else enable | `B\r` |
+| `--mute` / `--enable-alarm` / `--disable-alarm` | Feature alarm values 3 / 2 / 1 | NotSupported |
+| `--calibrate` / `calibrate()` | Test(2) deep (closest HID) | `TL\r` |
+| `--rating`, `--cancel-schedule`, `--indicator-test`, `--buzzer-test` | NotSupported | `F\r` / `C\r` / `TI\r` / `TB\r` |
+
+On **CP1500PFCLCDa** (VID `0x0764`, PID `0x0601`), recovered Feature reports:
+
+| Action | Report ID | Value |
+| --- | --- | --- |
+| Disable / Enable / Mute alarm | `0x0C` | 1 / 2 / 3 |
+| Quick / Deep / Abort test | `0x14` | 1 / 2 / 3 |
+
+Full reverse-engineering detail and confidence tags: **[PROTOCOL.md](PROTOCOL.md)**.
 
 ---
 
@@ -121,11 +174,12 @@ int main() {
     std::cout << "Battery: " << *status.battery_percent << "%\n";
   }
 
-  // Serial-only helpers (HID returns NotSupported):
+  // HID+serial where supported:
   // ups->self_test();
   // ups->cancel_test();
   // ups->toggle_buzzer();
-  // std::string rating; ups->read_rating(rating);
+  // ups->mute_alarm();
+  // std::string rating; ups->read_rating(rating);  // serial only
 }
 ```
 
@@ -178,6 +232,7 @@ cyberpower-ups/
 ├── fixtures/             # Capture instructions + optional dumps
 ├── examples/             # Library samples
 ├── cmake/                # Package config + pkg-config templates
+├── Makefile              # Thin wrapper around CMake
 ├── PROTOCOL.md           # Protocol notes & reverse-engineering detail
 └── CMakeLists.txt
 ```
@@ -189,10 +244,11 @@ cyberpower-ups/
 Offline tests need no UPS. They run the protocol self-test, parse hard-coded v2e status frames, and load JSON fixtures when present:
 
 ```bash
-cmake -S . -B build
-cmake --build build
+make test
+# or:
+cmake -S . -B build && cmake --build build
 ctest --test-dir build --output-on-failure
-# or: ./build/cpups --self-test
+./build/cpups --self-test
 ```
 
 Capture real-device fixtures (optional; see [fixtures/README.md](fixtures/README.md)):
@@ -209,7 +265,7 @@ Capture real-device fixtures (optional; see [fixtures/README.md](fixtures/README
 
 ## Supported Models
 
-The original driver recognizes many CPS models (EI, PIE, PRO, OR, PR, OL, PP, and more). This library speaks the common **v2e `D` text protocol** on serial and **standard HID usages** on USB. Model-specific branches from the original driver are not all specialized here yet.
+The original driver recognizes many CPS models (EI, PIE, PRO, OR, PR, OL, PP, and more). This library speaks the common **v2e `D` text protocol** on serial and **standard HID usages** on USB. Model-specific branches from the original driver are not all specialized here yet. HID alarm/test Feature writes are confirmed for PID `0x0601` (e.g. CP1500PFCLCDa); other product IDs resolve report IDs from the device descriptor when present.
 
 ---
 
@@ -223,4 +279,4 @@ This is an independent reverse-engineered library. It is **not** affiliated with
 
 ## Credits
 
-Protocol recovered from static analysis of PowerPanel Personal’s `libppbedrvc.dylib`.
+Protocol recovered from static analysis of PowerPanel Personal’s `libppbedrvc.dylib` (x86_64).

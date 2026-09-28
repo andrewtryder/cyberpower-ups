@@ -56,15 +56,16 @@ void usage(const char* argv0) {
             << "  --every-poll         with --monitor, print every sample (default: on change)\n"
             << "  --dump-raw           print serial TX/RX or HID report hex to stderr while reading\n"
             << "\n"
-            << "  Device commands (first UPS; serial protocols; HID returns NotSupported):\n"
-            << "  --test, --self-test-device   quick battery / self-test\n"
-            << "  --cancel-test                cancel battery / self-test\n"
-            << "  --buzzer, --beep             toggle audible alarm\n"
-            << "  --rating                     query rating / form factor\n"
-            << "  --cancel-schedule            cancel pending schedule\n"
-            << "  --calibrate                  battery calibration\n"
-            << "  --indicator-test             front-panel LED test\n"
-            << "  --buzzer-test                buzzer test\n";
+            << "  Device commands (first UPS):\n"
+            << "  --test, --self-test-device   quick self-test (HID+serial)\n"
+            << "  --cancel-test                cancel self-test (HID+serial)\n"
+            << "  --buzzer, --beep             toggle audible alarm (HID+serial)\n"
+            << "  --mute / --enable-alarm / --disable-alarm   HID Feature alarm\n"
+            << "  --calibrate                  serial TL, or HID deep Test(2)\n"
+            << "  --rating                     query rating (serial only)\n"
+            << "  --cancel-schedule            cancel schedule (serial only)\n"
+            << "  --indicator-test             LED test (serial only)\n"
+            << "  --buzzer-test                buzzer test (serial only)\n";
 }
 
 enum class DeviceAction {
@@ -72,6 +73,9 @@ enum class DeviceAction {
   SelfTest,
   CancelTest,
   ToggleBuzzer,
+  MuteAlarm,
+  EnableAlarm,
+  DisableAlarm,
   Rating,
   CancelSchedule,
   Calibrate,
@@ -84,6 +88,9 @@ const char* device_action_name(DeviceAction action) {
     case DeviceAction::SelfTest: return "self_test";
     case DeviceAction::CancelTest: return "cancel_test";
     case DeviceAction::ToggleBuzzer: return "toggle_buzzer";
+    case DeviceAction::MuteAlarm: return "mute_alarm";
+    case DeviceAction::EnableAlarm: return "enable_alarm";
+    case DeviceAction::DisableAlarm: return "disable_alarm";
     case DeviceAction::Rating: return "rating";
     case DeviceAction::CancelSchedule: return "cancel_schedule";
     case DeviceAction::Calibrate: return "calibrate";
@@ -111,6 +118,9 @@ int run_device_action(cyberpower::Ups& ups, DeviceAction action, bool json) {
     case DeviceAction::SelfTest: error = ups.self_test(); break;
     case DeviceAction::CancelTest: error = ups.cancel_test(); break;
     case DeviceAction::ToggleBuzzer: error = ups.toggle_buzzer(); break;
+    case DeviceAction::MuteAlarm: error = ups.mute_alarm(); break;
+    case DeviceAction::EnableAlarm: error = ups.enable_alarm(); break;
+    case DeviceAction::DisableAlarm: error = ups.disable_alarm(); break;
     case DeviceAction::Rating: error = ups.read_rating(rating); break;
     case DeviceAction::CancelSchedule: error = ups.cancel_schedule(); break;
     case DeviceAction::Calibrate: error = ups.calibrate(); break;
@@ -370,6 +380,12 @@ int main(int argc, char** argv) {
       if (!set_device_action(device_action, DeviceAction::CancelTest)) return 2;
     } else if (arg == "--buzzer" || arg == "--beep") {
       if (!set_device_action(device_action, DeviceAction::ToggleBuzzer)) return 2;
+    } else if (arg == "--mute") {
+      if (!set_device_action(device_action, DeviceAction::MuteAlarm)) return 2;
+    } else if (arg == "--enable-alarm") {
+      if (!set_device_action(device_action, DeviceAction::EnableAlarm)) return 2;
+    } else if (arg == "--disable-alarm") {
+      if (!set_device_action(device_action, DeviceAction::DisableAlarm)) return 2;
     } else if (arg == "--rating") {
       if (!set_device_action(device_action, DeviceAction::Rating)) return 2;
     } else if (arg == "--cancel-schedule") {

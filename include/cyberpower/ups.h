@@ -67,11 +67,16 @@ void cp_ups_close(cp_ups* ups);
 void cp_ups_read_status(cp_ups* ups, cp_status* out);
 void cp_ups_status_free(cp_status* status);
 
-/* High-level serial commands. Return the Error numeric value.
-   HID devices return NotSupported (1002). */
+/* High-level commands. Return the Error numeric value.
+   self_test / cancel_test / toggle_buzzer / calibrate work on HID and serial.
+   enable/disable/mute are HID Feature writes (NotSupported on serial).
+   indicator_test / buzzer_test / rating / cancel_schedule are serial-only. */
 int cp_ups_self_test(cp_ups* ups);
 int cp_ups_cancel_test(cp_ups* ups);
 int cp_ups_toggle_buzzer(cp_ups* ups);
+int cp_ups_enable_alarm(cp_ups* ups);
+int cp_ups_disable_alarm(cp_ups* ups);
+int cp_ups_mute_alarm(cp_ups* ups);
 /* rating_out is malloc'd on success (caller frees). May be NULL. */
 int cp_ups_read_rating(cp_ups* ups, char** rating_out);
 int cp_ups_cancel_schedule(cp_ups* ups);

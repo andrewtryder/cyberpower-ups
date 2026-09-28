@@ -149,6 +149,21 @@ int cp_ups_toggle_buzzer(cp_ups* ups) {
   return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.toggle_buzzer());
 }
 
+int cp_ups_enable_alarm(cp_ups* ups) {
+  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
+  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.enable_alarm());
+}
+
+int cp_ups_disable_alarm(cp_ups* ups) {
+  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
+  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.disable_alarm());
+}
+
+int cp_ups_mute_alarm(cp_ups* ups) {
+  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
+  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.mute_alarm());
+}
+
 int cp_ups_read_rating(cp_ups* ups, char** rating_out) {
   if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
   std::string reply;

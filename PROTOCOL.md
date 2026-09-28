@@ -2,6 +2,8 @@
 
 Technical detail recovered from PowerPanel Personal’s native driver (`libppbedrvc.dylib`). This document is for contributors and anyone digging into the wire format. For build instructions and the public API, see [README.md](README.md).
 
+**Why reverse-engineer it:** that dylib is an **x86_64-only** binary. On Apple Silicon Macs, PowerPanel’s native path requires Rosetta (or is unavailable as a clean arm64 stack). This project recovers the protocol so a native C++ library can talk to the UPS over HID/serial without linking the proprietary driver. Independent work; not affiliated with Cyber Power Systems.
+
 ---
 
 ## Confidence Legend
@@ -19,7 +21,7 @@ Every recovered constant in the headers is tagged:
 
 ## What the Original Driver Is
 
-`libppbedrvc.dylib` is the JNI native half of PowerPanel Personal.
+`libppbedrvc.dylib` is the JNI native half of PowerPanel Personal. The shipping binary examined here is **x86_64** (not a universal / arm64 slice).
 
 It exports:
 
@@ -164,6 +166,35 @@ Usages used for the status snapshot (page/usage High; English names from the USB
 | `0x85` | `0x45`, `0xD2` | Discharging |
 
 Vendor page `0xFF86` is mapped heavily (usages `0x72`, `0x42`, `0x16`, …). Those values are not decoded here; the semantic is Low.
+
+### HID controls (alarm / test)
+
+Controls are **not** serial text commands. `HidUps` writes Power Device usages via `IOHIDDeviceSetValue` / `SetValueMultiple` (High: driver call sites). Report IDs come from the report descriptor element, not from hardcoded blobs.
+
+| Control | Page | Usage | Confidence |
+| --- | --- | --- | --- |
+| Audible Alarm Control | `0x84` | `0x5A` | High |
+| Test | `0x84` | `0x58` | High |
+
+Values (High for 1..3 from `HidUps` / capability mapping; English names Medium):
+
+| Action | Value |
+| --- | --- |
+| Disable alarm | 1 |
+| Enable alarm | 2 |
+| Mute alarm | 3 |
+| Quick self-test | 1 |
+| Deep / battery test | 2 |
+| Cancel / abort test | 3 |
+
+On **CP1500PFCLCDa** (VID `0x0764`, PID `0x0601`) the live report descriptor maps Feature reports (High):
+
+| Action | Report type | Report ID | Value |
+| --- | --- | --- | --- |
+| Disable / Enable / Mute alarm | Feature | `0x0C` | 1 / 2 / 3 |
+| Quick / Deep / Abort test | Feature | `0x14` | 1 / 2 / 3 |
+
+This library prefers `IOHIDDeviceSetValue` with the resolved element’s report ID, and falls back to `IOHIDDeviceSetReport` Feature `[report_id][value]` (using the PID `0x0601` IDs only when the element is missing). Serial-only commands (`TI`, `TB`, named `TL`) stay `NotSupported` on HID; `calibrate()` maps to Test(2) as the closest HID equivalent (Medium).
 
 The macOS backend opens the device with `IOHIDDeviceOpen`, registers an input-report callback so the element cache fills, and reads elements with `IOHIDDeviceGetValue` plus `IOHIDValueGetScaledValue`. If PowerPanel Personal already has the device seized, open fails.
 

@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -51,12 +52,37 @@ bool read_physical(IOHIDDeviceRef device, IOHIDElementRef element, double& out) 
   return true;
 }
 
+// Prefer Feature, then Output, for writable control elements.
+IOHIDElementRef find_control_element(IOHIDDeviceRef device, uint32_t page, uint32_t usage) {
+  CFArrayRef elements = IOHIDDeviceCopyMatchingElements(device, nullptr, kIOHIDOptionsTypeNone);
+  if (elements == nullptr) return nullptr;
+
+  IOHIDElementRef best = nullptr;
+  IOHIDElementType best_type = kIOHIDElementTypeInput_Misc;
+  const CFIndex count = CFArrayGetCount(elements);
+  for (CFIndex i = 0; i < count; ++i) {
+    auto* element = static_cast<IOHIDElementRef>(const_cast<void*>(CFArrayGetValueAtIndex(elements, i)));
+    if (IOHIDElementGetUsagePage(element) != page || IOHIDElementGetUsage(element) != usage) continue;
+    const IOHIDElementType type = IOHIDElementGetType(element);
+    if (type != kIOHIDElementTypeFeature && type != kIOHIDElementTypeOutput) continue;
+    if (best == nullptr || (type == kIOHIDElementTypeFeature && best_type != kIOHIDElementTypeFeature)) {
+      best = element;
+      best_type = type;
+    }
+  }
+  if (best != nullptr) CFRetain(best);
+  CFRelease(elements);
+  return best;
+}
+
 class HidTransport : public Transport {
  public:
   HidTransport(IOHIDManagerRef manager, IOHIDDeviceRef device, DeviceInfo info)
       : manager_(manager), device_(device), info_(std::move(info)) {
     CFRetain(manager_);
     CFRetain(device_);
+    alarm_element_ = find_control_element(device_, protocol::kPagePowerDevice, protocol::kUsageAudibleAlarmControl);
+    test_element_ = find_control_element(device_, protocol::kPagePowerDevice, protocol::kUsageTest);
     IOHIDDeviceRegisterInputReportCallback(device_, report_, sizeof report_, &HidTransport::on_report, this);
     IOHIDDeviceScheduleWithRunLoop(device_, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
     // Let the run loop deliver the first input report into the element cache.
@@ -67,6 +93,8 @@ class HidTransport : public Transport {
     IOHIDDeviceUnscheduleFromRunLoop(device_, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
     IOHIDDeviceRegisterInputReportCallback(device_, report_, sizeof report_, nullptr, nullptr);
     IOHIDDeviceClose(device_, kIOHIDOptionsTypeNone);
+    if (alarm_element_ != nullptr) CFRelease(alarm_element_);
+    if (test_element_ != nullptr) CFRelease(test_element_);
     CFRelease(device_);
     IOHIDManagerUnscheduleFromRunLoop(manager_, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
     IOHIDManagerClose(manager_, kIOHIDOptionsTypeNone);
@@ -208,7 +236,81 @@ class HidTransport : public Transport {
 
   Error transact(const std::string&, std::string&) override { return Error::NotSupported; }
 
+  Error set_alarm_control(int value) override {
+    return write_control(alarm_element_, protocol::kUsageAudibleAlarmControl, value,
+                         fallback_alarm_report_id());
+  }
+
+  Error get_alarm_control(int& value) override {
+    if (alarm_element_ == nullptr) return Error::NotSupported;
+    IOHIDValueRef hid_value = nullptr;
+    if (IOHIDDeviceGetValue(device_, alarm_element_, &hid_value) != kIOReturnSuccess ||
+        hid_value == nullptr) {
+      return Error::Io;
+    }
+    value = static_cast<int>(IOHIDValueGetIntegerValue(hid_value));
+    return Error::Ok;
+  }
+
+  Error set_test_mode(int value) override {
+    return write_control(test_element_, protocol::kUsageTest, value, fallback_test_report_id());
+  }
+
  private:
+  std::optional<uint8_t> fallback_alarm_report_id() const {
+    if (info_.product_id == protocol::kPidCp1500Pfclcda) return protocol::kPid0601AlarmReportId;
+    return std::nullopt;
+  }
+
+  std::optional<uint8_t> fallback_test_report_id() const {
+    if (info_.product_id == protocol::kPidCp1500Pfclcda) return protocol::kPid0601TestReportId;
+    return std::nullopt;
+  }
+
+  Error write_control(IOHIDElementRef element, uint32_t usage, int value,
+                      std::optional<uint8_t> fallback_report_id) {
+    // Preferred path: element SetValue (matches HidUps / IOHIDDeviceSetValue).
+    if (element != nullptr) {
+      IOHIDValueRef hid_value =
+          IOHIDValueCreateWithIntegerValue(kCFAllocatorDefault, element, 0 /* timestamp */, value);
+      if (hid_value == nullptr) return Error::Io;
+      const IOReturn set_rc = IOHIDDeviceSetValue(device_, element, hid_value);
+      CFRelease(hid_value);
+      if (set_rc == kIOReturnSuccess) {
+        if (raw_dump_sink() != nullptr) {
+          char line[96];
+          std::snprintf(line, sizeof line, "hid setvalue usage=0x%04x value=%d report_id=%u",
+                        usage, value, static_cast<unsigned>(IOHIDElementGetReportID(element)));
+          dump_raw_line(line);
+        }
+        return Error::Ok;
+      }
+    }
+
+    // Fallback: Feature report [report_id][value]. Report ID from the element
+    // when present, else PID 0x0601 descriptor fallbacks (High for that PID).
+    uint8_t report_id = 0;
+    if (element != nullptr) {
+      report_id = static_cast<uint8_t>(IOHIDElementGetReportID(element));
+    } else if (fallback_report_id.has_value()) {
+      report_id = *fallback_report_id;
+    } else {
+      return Error::NotSupported;
+    }
+
+    uint8_t payload[2] = {report_id, static_cast<uint8_t>(value)};
+    const IOReturn report_rc =
+        IOHIDDeviceSetReport(device_, kIOHIDReportTypeFeature, report_id, payload, sizeof payload);
+    if (raw_dump_sink() != nullptr) {
+      char line[128];
+      std::snprintf(line, sizeof line,
+                    "hid setreport feature id=0x%02x usage=0x%04x value=%d rc=0x%x",
+                    report_id, usage, value, static_cast<unsigned>(report_rc));
+      dump_raw_line(line);
+    }
+    return report_rc == kIOReturnSuccess ? Error::Ok : Error::Io;
+  }
+
   static std::string hex_bytes(const uint8_t* data, CFIndex len) {
     std::string out;
     out.reserve(static_cast<std::size_t>(len) * 3);
@@ -240,6 +342,8 @@ class HidTransport : public Transport {
   IOHIDManagerRef manager_;
   IOHIDDeviceRef device_;
   DeviceInfo info_;
+  IOHIDElementRef alarm_element_ = nullptr;  // 0x84 / 0x5A
+  IOHIDElementRef test_element_ = nullptr;   // 0x84 / 0x58
   uint8_t report_[1024] = {};
   uint8_t last_report_[1024] = {};
   CFIndex last_report_len_ = 0;

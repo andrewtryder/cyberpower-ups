@@ -89,11 +89,45 @@ Error Ups::send_command(const char* command) {
   return impl_->transport->transact(command, unused);
 }
 
-Error Ups::self_test() { return send_command(protocol::cmd::kBatteryTestQuick); }
+Error Ups::self_test() {
+  // HID: Test(1) quick. Serial: "T\r".
+  const Error hid = impl_->transport->set_test_mode(protocol::kTestQuick);
+  if (hid != Error::NotSupported) return hid;
+  return send_command(protocol::cmd::kBatteryTestQuick);
+}
 
-Error Ups::cancel_test() { return send_command(protocol::cmd::kCancelOrSelfTest); }
+Error Ups::cancel_test() {
+  // HID: Test(3) abort. Serial: "CT\r".
+  const Error hid = impl_->transport->set_test_mode(protocol::kTestAbort);
+  if (hid != Error::NotSupported) return hid;
+  return send_command(protocol::cmd::kCancelOrSelfTest);
+}
 
-Error Ups::toggle_buzzer() { return send_command(protocol::cmd::kToggleBuzzer); }
+Error Ups::enable_alarm() {
+  return impl_->transport->set_alarm_control(protocol::kAlarmEnable);
+}
+
+Error Ups::disable_alarm() {
+  return impl_->transport->set_alarm_control(protocol::kAlarmDisable);
+}
+
+Error Ups::mute_alarm() {
+  return impl_->transport->set_alarm_control(protocol::kAlarmMute);
+}
+
+Error Ups::toggle_buzzer() {
+  // HID best-effort toggle: mute when currently enabled (2), otherwise enable.
+  // Serial: "B\r" (v1 ToggleBuzzerRequester). High for serial; Medium HID policy.
+  int current = 0;
+  if (impl_->transport->get_alarm_control(current) == Error::Ok) {
+    const int next =
+        (current == protocol::kAlarmEnable) ? protocol::kAlarmMute : protocol::kAlarmEnable;
+    return impl_->transport->set_alarm_control(next);
+  }
+  const Error hid = impl_->transport->set_alarm_control(protocol::kAlarmMute);
+  if (hid != Error::NotSupported) return hid;
+  return send_command(protocol::cmd::kToggleBuzzer);
+}
 
 Error Ups::read_rating(std::string& response) {
   return impl_->transport->transact(protocol::cmd::kRating, response);
@@ -101,7 +135,12 @@ Error Ups::read_rating(std::string& response) {
 
 Error Ups::cancel_schedule() { return send_command(protocol::cmd::kCancelSchedule); }
 
-Error Ups::calibrate() { return send_command(protocol::cmd::kBatteryCalibrate); }
+Error Ups::calibrate() {
+  // Serial: "TL\r". HID has no separate TL — closest is Test(2) deep/battery.
+  const Error hid = impl_->transport->set_test_mode(protocol::kTestDeep);
+  if (hid != Error::NotSupported) return hid;
+  return send_command(protocol::cmd::kBatteryCalibrate);
+}
 
 Error Ups::indicator_test() { return send_command(protocol::cmd::kIndicatorTest); }
 

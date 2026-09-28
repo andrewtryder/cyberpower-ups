@@ -189,6 +189,27 @@ constexpr uint16_t kPageBattery = 0x0085;
 constexpr uint16_t kPageVendorFf86 = 0xFF86;
 constexpr uint16_t kPageVendorFf01 = 0xFF01;
 
+// Writable controls recovered from HidUps + UsageMapping (High page/usage).
+// Report IDs are descriptor-owned; PID 0x0601 fallbacks are High from the
+// live CP1500PFCLCDa report descriptor.
+constexpr uint16_t kUsageAudibleAlarmControl = 0x005A;  // Power Device
+constexpr uint16_t kUsageTest = 0x0058;                  // Power Device
+
+// Audible Alarm Control values (High for 1..3; 4/5 when capability max > 3).
+constexpr int kAlarmDisable = 1;
+constexpr int kAlarmEnable = 2;
+constexpr int kAlarmMute = 3;
+
+// HidUps::TEST_MODE immediates from OnHandleConverse (Medium English names).
+constexpr int kTestQuick = 1;
+constexpr int kTestDeep = 2;
+constexpr int kTestAbort = 3;
+
+// Feature report ID fallbacks for product id 0x0601 only (High from descriptor).
+constexpr uint8_t kPid0601AlarmReportId = 0x0C;
+constexpr uint8_t kPid0601TestReportId = 0x14;
+constexpr uint16_t kPidCp1500Pfclcda = 0x0601;
+
 // Usages that both appear in UsageMapping::Initialize and have a standard
 // USB HID Power Device / Battery System name. The pair (page, usage) is
 // High. The English name is the HID Usage Tables name (Medium: the binary

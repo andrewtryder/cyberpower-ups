@@ -22,6 +22,12 @@ class Transport {
   virtual const DeviceInfo& info() const = 0;
   virtual Status read_status() = 0;
   virtual Error transact(const std::string& command, std::string& response) = 0;
+
+  // HID usage writes (Power Device 0x84/0x5A and 0x84/0x58). Serial returns
+  // NotSupported so the Ups layer can fall back to text commands.
+  virtual Error set_alarm_control(int /*value*/) { return Error::NotSupported; }
+  virtual Error get_alarm_control(int& /*value*/) { return Error::NotSupported; }
+  virtual Error set_test_mode(int /*value*/) { return Error::NotSupported; }
 };
 
 std::vector<DeviceInfo> list_hid();
