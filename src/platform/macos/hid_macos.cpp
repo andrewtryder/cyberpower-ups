@@ -1,0 +1,299 @@
+#include "internal/transport.hpp"
+
+#include "cyberpower/protocol.hpp"
+
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/hid/IOHIDManager.h>
+
+#include <cmath>
+#include <string>
+#include <vector>
+
+namespace cyberpower::platform {
+namespace {
+
+std::string cf_string(CFTypeRef value) {
+  if (value == nullptr || CFGetTypeID(value) != CFStringGetTypeID()) return {};
+  char buf[512];
+  if (!CFStringGetCString(static_cast<CFStringRef>(value), buf, sizeof buf, kCFStringEncodingUTF8)) {
+    return {};
+  }
+  return buf;
+}
+
+int cf_int(CFTypeRef value) {
+  if (value == nullptr || CFGetTypeID(value) != CFNumberGetTypeID()) return 0;
+  int out = 0;
+  CFNumberGetValue(static_cast<CFNumberRef>(value), kCFNumberIntType, &out);
+  return out;
+}
+
+bool ancestor_is(IOHIDElementRef element, uint32_t page, uint32_t usage) {
+  for (IOHIDElementRef parent = IOHIDElementGetParent(element); parent != nullptr;
+       parent = IOHIDElementGetParent(parent)) {
+    if (IOHIDElementGetUsagePage(parent) == page && IOHIDElementGetUsage(parent) == usage) return true;
+  }
+  return false;
+}
+
+bool read_physical(IOHIDDeviceRef device, IOHIDElementRef element, double& out) {
+  IOHIDValueRef value = nullptr;
+  if (IOHIDDeviceGetValue(device, element, &value) != kIOReturnSuccess || value == nullptr) return false;
+  out = IOHIDValueGetScaledValue(value, kIOHIDValueScaleTypePhysical);
+  const CFIndex logical = IOHIDValueGetIntegerValue(value);
+  // Some CyberPower reports leave the unit exponent at 0, so the physical
+  // scale collapses to 0 while the logical value is the real reading.
+  // Medium: fall back only in that case.
+  if (out == 0.0 && logical != 0) out = static_cast<double>(logical);
+  return true;
+}
+
+class HidTransport : public Transport {
+ public:
+  HidTransport(IOHIDManagerRef manager, IOHIDDeviceRef device, DeviceInfo info)
+      : manager_(manager), device_(device), info_(std::move(info)) {
+    CFRetain(manager_);
+    CFRetain(device_);
+    IOHIDDeviceRegisterInputReportCallback(device_, report_, sizeof report_, &HidTransport::on_report, this);
+    IOHIDDeviceScheduleWithRunLoop(device_, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+    // Let the run loop deliver the first input report into the element cache.
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
+  }
+
+  ~HidTransport() override {
+    IOHIDDeviceUnscheduleFromRunLoop(device_, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+    IOHIDDeviceRegisterInputReportCallback(device_, report_, sizeof report_, nullptr, nullptr);
+    IOHIDDeviceClose(device_, kIOHIDOptionsTypeNone);
+    CFRelease(device_);
+    IOHIDManagerUnscheduleFromRunLoop(manager_, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+    IOHIDManagerClose(manager_, kIOHIDOptionsTypeNone);
+    CFRelease(manager_);
+  }
+
+  const DeviceInfo& info() const override { return info_; }
+
+  Status read_status() override {
+    Status status;
+    status.transport = TransportKind::Hid;
+    status.ok = true;
+
+    CFArrayRef elements = IOHIDDeviceCopyMatchingElements(device_, nullptr, kIOHIDOptionsTypeNone);
+    if (elements == nullptr) {
+      status.ok = false;
+      status.error = Error::Io;
+      status.message = "IOHIDDeviceCopyMatchingElements failed";
+      return status;
+    }
+
+    double input_v = 0, output_v = 0, battery_v = 0, load = 0, freq = 0, temp = 0;
+    double remain = 0, full = 0, runtime = 0;
+    bool got_input = false, got_output = false, got_battery_v = false;
+    bool got_load = false, got_freq = false, got_temp = false;
+    bool got_remain = false, got_full = false, got_runtime = false;
+    int loose_voltage = 0;
+
+    const CFIndex count = CFArrayGetCount(elements);
+    for (CFIndex i = 0; i < count; ++i) {
+      auto* element = static_cast<IOHIDElementRef>(const_cast<void*>(CFArrayGetValueAtIndex(elements, i)));
+      const uint32_t page = IOHIDElementGetUsagePage(element);
+      const uint32_t usage = IOHIDElementGetUsage(element);
+      double value = 0;
+      if (!read_physical(device_, element, value)) continue;
+
+      if (page == protocol::kPagePowerDevice && usage == 0x30) {
+        // Voltage. Parent collection decides input / output / battery. High
+        // that 0x84/0x30 is mapped; the parent test uses usages also mapped
+        // in the same function (0x1A, 0x1C, 0x12).
+        if (ancestor_is(element, protocol::kPagePowerDevice, 0x1A)) {
+          input_v = value;
+          got_input = true;
+        } else if (ancestor_is(element, protocol::kPagePowerDevice, 0x1C)) {
+          output_v = value;
+          got_output = true;
+        } else if (ancestor_is(element, protocol::kPagePowerDevice, 0x12)) {
+          battery_v = value;
+          got_battery_v = true;
+        } else if (loose_voltage == 0) {
+          input_v = value;
+          got_input = true;
+          ++loose_voltage;
+        } else if (loose_voltage == 1) {
+          output_v = value;
+          got_output = true;
+          ++loose_voltage;
+        }
+      } else if (page == protocol::kPagePowerDevice && usage == 0x35) {
+        load = value;
+        got_load = true;
+      } else if (page == protocol::kPagePowerDevice && usage == 0x32) {
+        freq = value;
+        got_freq = true;
+      } else if (page == protocol::kPagePowerDevice && usage == 0x36) {
+        temp = value;
+        got_temp = true;
+      } else if (page == protocol::kPageBattery && usage == 0x66) {
+        remain = value;
+        got_remain = true;
+      } else if (page == protocol::kPageBattery && usage == 0x67) {
+        full = value;
+        got_full = true;
+      } else if (page == protocol::kPageBattery && usage == 0x68) {
+        runtime = value;
+        got_runtime = true;
+      } else if ((page == protocol::kPageBattery && usage == 0xD0) ||
+                 (page == protocol::kPageVendorFf01 && usage == 0xD0)) {
+        status.ac_present = value != 0.0;
+      } else if ((page == protocol::kPageBattery && (usage == 0x44 || usage == 0xD1)) ||
+                 (page == protocol::kPageVendorFf01 && usage == 0xD1)) {
+        status.charging = value != 0.0;
+      } else if ((page == protocol::kPageBattery && (usage == 0x45 || usage == 0xD2)) ||
+                 (page == protocol::kPageVendorFf01 && usage == 0xD2)) {
+        status.discharging = value != 0.0;
+      }
+    }
+    CFRelease(elements);
+
+    if (got_load) status.load_percent = load;
+    if (got_freq) status.frequency_hz = freq;
+    if (got_temp) status.temperature_c = temp;
+    if (got_input) status.input_voltage_v = input_v;
+    if (got_output) status.output_voltage_v = output_v;
+    if (got_battery_v) status.battery_voltage_v = battery_v;
+    if (got_runtime) status.runtime_seconds = runtime;
+    if (got_remain) {
+      // RemainingCapacity is a percent on most of these UPSes. If the
+      // device also exposes a larger full-charge capacity, convert.
+      // Medium: the HID unit is not printed in the driver.
+      if (got_full && full > 0.0 && remain > 100.0) {
+        status.battery_percent = (remain / full) * 100.0;
+      } else {
+        status.battery_percent = remain;
+      }
+    }
+    if (!got_remain && !got_load && !got_input && !got_runtime) {
+      status.ok = false;
+      status.error = Error::RespNoAvailableItem;
+      status.message = "HID device exposed none of the recovered status usages";
+    }
+    return status;
+  }
+
+  Error transact(const std::string&, std::string&) override { return Error::NotSupported; }
+
+ private:
+  static void on_report(void*, IOReturn, void*, IOHIDReportType, uint32_t, uint8_t*, CFIndex) {}
+
+  IOHIDManagerRef manager_;
+  IOHIDDeviceRef device_;
+  DeviceInfo info_;
+  uint8_t report_[1024] = {};
+};
+
+IOHIDManagerRef make_manager(std::string& error) {
+  IOHIDManagerRef manager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
+  if (manager == nullptr) {
+    error = "IOHIDManagerCreate failed";
+    return nullptr;
+  }
+  // Vendor 0x0764. High. Product id is intentionally not filtered: the
+  // driver builds dictionaries for 0x0005 / 0x0501 / 0x0601 and then
+  // special-cases further ids (0x051D and others) inside UsageMapping.
+  int vendor = protocol::kVendorId;
+  CFNumberRef vendor_num = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &vendor);
+  CFMutableDictionaryRef match = CFDictionaryCreateMutable(
+      kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+  CFDictionarySetValue(match, CFSTR(kIOHIDVendorIDKey), vendor_num);
+  IOHIDManagerSetDeviceMatching(manager, match);
+  CFRelease(match);
+  CFRelease(vendor_num);
+  IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+  if (IOHIDManagerOpen(manager, kIOHIDOptionsTypeNone) != kIOReturnSuccess) {
+    IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+    CFRelease(manager);
+    error = "IOHIDManagerOpen failed";
+    return nullptr;
+  }
+  CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
+  return manager;
+}
+
+DeviceInfo info_from(IOHIDDeviceRef device) {
+  DeviceInfo info;
+  info.transport = TransportKind::Hid;
+  info.vendor_id = static_cast<uint16_t>(cf_int(IOHIDDeviceGetProperty(device, CFSTR(kIOHIDVendorIDKey))));
+  info.product_id = static_cast<uint16_t>(cf_int(IOHIDDeviceGetProperty(device, CFSTR(kIOHIDProductIDKey))));
+  info.location_id = cf_int(IOHIDDeviceGetProperty(device, CFSTR(kIOHIDLocationIDKey)));
+  info.product = cf_string(IOHIDDeviceGetProperty(device, CFSTR(kIOHIDProductKey)));
+  info.serial_number = cf_string(IOHIDDeviceGetProperty(device, CFSTR(kIOHIDSerialNumberKey)));
+  info.path = "hid:" + std::to_string(info.vendor_id) + ":" + std::to_string(info.product_id) + ":" +
+              std::to_string(info.location_id);
+  return info;
+}
+
+}  // namespace
+
+std::vector<DeviceInfo> list_hid() {
+  std::string error;
+  IOHIDManagerRef manager = make_manager(error);
+  if (manager == nullptr) return {};
+  std::vector<DeviceInfo> found;
+  CFSetRef devices = IOHIDManagerCopyDevices(manager);
+  if (devices != nullptr) {
+    const CFIndex count = CFSetGetCount(devices);
+    std::vector<const void*> items(static_cast<std::size_t>(count));
+    CFSetGetValues(devices, items.data());
+    for (const void* item : items) {
+      found.push_back(info_from(static_cast<IOHIDDeviceRef>(const_cast<void*>(item))));
+    }
+    CFRelease(devices);
+  }
+  IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+  IOHIDManagerClose(manager, kIOHIDOptionsTypeNone);
+  CFRelease(manager);
+  return found;
+}
+
+std::unique_ptr<Transport> open_hid(const DeviceInfo& info, std::string& error) {
+  IOHIDManagerRef manager = make_manager(error);
+  if (manager == nullptr) return nullptr;
+  CFSetRef devices = IOHIDManagerCopyDevices(manager);
+  IOHIDDeviceRef chosen = nullptr;
+  if (devices != nullptr) {
+    const CFIndex count = CFSetGetCount(devices);
+    std::vector<const void*> items(static_cast<std::size_t>(count));
+    CFSetGetValues(devices, items.data());
+    for (const void* item : items) {
+      auto* device = static_cast<IOHIDDeviceRef>(const_cast<void*>(item));
+      if (info_from(device).path == info.path) {
+        chosen = device;
+        CFRetain(chosen);
+        break;
+      }
+    }
+    CFRelease(devices);
+  }
+  if (chosen == nullptr) {
+    IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+    IOHIDManagerClose(manager, kIOHIDOptionsTypeNone);
+    CFRelease(manager);
+    error = "HID device is no longer present";
+    return nullptr;
+  }
+  IOReturn opened = IOHIDDeviceOpen(chosen, kIOHIDOptionsTypeSeizeDevice);
+  if (opened != kIOReturnSuccess) opened = IOHIDDeviceOpen(chosen, kIOHIDOptionsTypeNone);
+  if (opened != kIOReturnSuccess) {
+    CFRelease(chosen);
+    IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+    IOHIDManagerClose(manager, kIOHIDOptionsTypeNone);
+    CFRelease(manager);
+    error = "IOHIDDeviceOpen failed";
+    return nullptr;
+  }
+  // HidTransport retains both. Drop the references this function owns.
+  std::unique_ptr<Transport> transport(new HidTransport(manager, chosen, info_from(chosen)));
+  CFRelease(chosen);
+  CFRelease(manager);
+  return transport;
+}
+
+}  // namespace cyberpower::platform

@@ -1,0 +1,111 @@
+# cyberpower-ups
+
+A modern C++17 library and command-line tool for talking to CyberPower UPS devices over **USB HID** and **serial**.
+
+The wire protocol was recovered by static analysis of PowerPanel Personal’s native driver (`libppbedrvc.dylib`). This library does **not** link or depend on that dylib — it speaks to the hardware directly.
+
+- Works today on **macOS** (IOKit HID + termios)
+- Windows port is prepared (platform layer is isolated)
+- Clean public C++ and C APIs so you can use it from other applications
+- Direct device access only (no network / TCP/IP card required)
+
+For protocol internals, recovered constants, and confidence annotations, see **[PROTOCOL.md](PROTOCOL.md)**.
+
+---
+
+## Features
+
+- Device discovery (USB HID + serial ports)
+- Status polling (voltage, load, battery %, runtime, AC present, and more)
+- Self-test command
+- JSON output
+- Recovered text protocol (v1 / v2e / titan) and v3 binary framing
+- HID Power Device / Battery usage support
+
+---
+
+## Quick Start
+
+```bash
+cmake -S . -B build
+cmake --build build
+
+# List devices and show status
+./build/cpups
+
+# Run parser + CRC self-test (no hardware needed)
+./build/cpups --self-test
+
+# JSON output
+./build/cpups --json
+```
+
+`cpups` is the day-to-day CLI. `examples/list_and_status` is a thinner library sample if you want a starting point for your own code.
+
+---
+
+## Using the Library
+
+```cpp
+#include <cyberpower/ups.hpp>
+#include <iostream>
+
+int main() {
+  auto devices = cyberpower::list_devices();
+  if (devices.empty()) {
+    std::cerr << "No UPS found\n";
+    return 1;
+  }
+
+  auto ups = cyberpower::open_device(devices[0]);
+  auto status = ups->read_status();
+  std::cout << "Battery: " << status.battery_percent << "%\n";
+}
+```
+
+A pure C API is also available in `cyberpower/ups.h`.
+
+### Headers
+
+| Header | Purpose |
+|--------|---------|
+| `include/cyberpower/ups.hpp` | Main C++ API (`list_devices`, `open_device`, `read_status`, …) |
+| `include/cyberpower/ups.h` | Same operations as a C API |
+| `include/cyberpower/protocol.hpp` | Commands, parsers, HID usages |
+| `include/cyberpower/errors.hpp` | `UPS_ERR_*` and `RESP_ERR_*` |
+
+---
+
+## Project Layout
+
+```
+cyberpower-ups/
+├── include/cyberpower/   # Public headers
+├── src/
+│   ├── platform/macos/   # IOKit + termios
+│   └── platform/windows/ # Stub (ready for SetupAPI + COM)
+├── tools/cpups.cpp       # Command-line tool
+├── examples/             # Library samples
+├── PROTOCOL.md           # Protocol notes & reverse-engineering detail
+└── CMakeLists.txt
+```
+
+---
+
+## Supported Models
+
+The original driver recognizes many CPS models (EI, PIE, PRO, OR, PR, OL, PP, and more). This library speaks the common **v2e `D` text protocol** on serial and **standard HID usages** on USB. Model-specific branches from the original driver are not all specialized here yet.
+
+---
+
+## License & Disclaimer
+
+MIT License — see [LICENSE](LICENSE).
+
+This is an independent reverse-engineered library. It is **not** affiliated with, endorsed by, or supported by Cyber Power Systems, Inc. Use at your own risk. The authors are not responsible for any damage to hardware or data.
+
+---
+
+## Credits
+
+Protocol recovered from static analysis of PowerPanel Personal’s `libppbedrvc.dylib`.
