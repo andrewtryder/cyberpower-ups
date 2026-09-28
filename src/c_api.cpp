@@ -2,10 +2,12 @@
 
 #include "cyberpower/ups.hpp"
 
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -21,6 +23,35 @@ void set_opt(int& has, double& dest, const std::optional<double>& value) {
   if (value) {
     has = 1;
     dest = *value;
+  }
+}
+
+void fill_status(cp_status* out, const cyberpower::Status& status) {
+  std::memset(out, 0, sizeof *out);
+  out->ok = status.ok ? 1 : 0;
+  out->error = static_cast<int>(status.error);
+  out->message = dup_cstr(status.message);
+  out->transport = status.transport == cyberpower::TransportKind::Serial ? 1 : 0;
+  out->raw = dup_cstr(status.raw);
+  set_opt(out->has_battery_percent, out->battery_percent, status.battery_percent);
+  set_opt(out->has_input_voltage_v, out->input_voltage_v, status.input_voltage_v);
+  set_opt(out->has_output_voltage_v, out->output_voltage_v, status.output_voltage_v);
+  set_opt(out->has_load_percent, out->load_percent, status.load_percent);
+  set_opt(out->has_runtime_seconds, out->runtime_seconds, status.runtime_seconds);
+  set_opt(out->has_frequency_hz, out->frequency_hz, status.frequency_hz);
+  set_opt(out->has_temperature_c, out->temperature_c, status.temperature_c);
+  set_opt(out->has_battery_voltage_v, out->battery_voltage_v, status.battery_voltage_v);
+  if (status.ac_present) {
+    out->has_ac_present = 1;
+    out->ac_present = *status.ac_present ? 1 : 0;
+  }
+  if (status.charging) {
+    out->has_charging = 1;
+    out->charging = *status.charging ? 1 : 0;
+  }
+  if (status.discharging) {
+    out->has_discharging = 1;
+    out->discharging = *status.discharging ? 1 : 0;
   }
 }
 
@@ -86,38 +117,13 @@ void cp_ups_close(cp_ups* ups) { delete reinterpret_cast<Session*>(ups); }
 
 void cp_ups_read_status(cp_ups* ups, cp_status* out) {
   if (out == nullptr) return;
-  std::memset(out, 0, sizeof *out);
   if (ups == nullptr) {
+    std::memset(out, 0, sizeof *out);
     out->error = static_cast<int>(cyberpower::Error::Io);
     out->message = dup_cstr("null device");
     return;
   }
-  const cyberpower::Status status = reinterpret_cast<Session*>(ups)->ups.read_status();
-  out->ok = status.ok ? 1 : 0;
-  out->error = static_cast<int>(status.error);
-  out->message = dup_cstr(status.message);
-  out->transport = status.transport == cyberpower::TransportKind::Serial ? 1 : 0;
-  out->raw = dup_cstr(status.raw);
-  set_opt(out->has_battery_percent, out->battery_percent, status.battery_percent);
-  set_opt(out->has_input_voltage_v, out->input_voltage_v, status.input_voltage_v);
-  set_opt(out->has_output_voltage_v, out->output_voltage_v, status.output_voltage_v);
-  set_opt(out->has_load_percent, out->load_percent, status.load_percent);
-  set_opt(out->has_runtime_seconds, out->runtime_seconds, status.runtime_seconds);
-  set_opt(out->has_frequency_hz, out->frequency_hz, status.frequency_hz);
-  set_opt(out->has_temperature_c, out->temperature_c, status.temperature_c);
-  set_opt(out->has_battery_voltage_v, out->battery_voltage_v, status.battery_voltage_v);
-  if (status.ac_present) {
-    out->has_ac_present = 1;
-    out->ac_present = *status.ac_present ? 1 : 0;
-  }
-  if (status.charging) {
-    out->has_charging = 1;
-    out->charging = *status.charging ? 1 : 0;
-  }
-  if (status.discharging) {
-    out->has_discharging = 1;
-    out->discharging = *status.discharging ? 1 : 0;
-  }
+  fill_status(out, reinterpret_cast<Session*>(ups)->ups.read_status());
 }
 
 void cp_ups_status_free(cp_status* status) {
@@ -177,6 +183,41 @@ int cp_ups_transact(cp_ups* ups, const char* command, char** response) {
   const cyberpower::Error error = reinterpret_cast<Session*>(ups)->ups.transact(command, reply);
   if (response) *response = dup_cstr(reply);
   return static_cast<int>(error);
+}
+
+void cp_ups_monitor(cp_ups* ups,
+                    int interval_ms,
+                    int only_on_change,
+                    volatile int* stop_flag,
+                    cp_ups_monitor_cb callback,
+                    void* user_data) {
+  if (ups == nullptr || callback == nullptr || stop_flag == nullptr) return;
+
+  const auto interval = std::chrono::milliseconds(interval_ms > 0 ? interval_ms : 2000);
+  const bool filter = only_on_change != 0;
+  auto& device = reinterpret_cast<Session*>(ups)->ups;
+  std::optional<cyberpower::Status> previous;
+
+  while (!*stop_flag) {
+    const cyberpower::Status status = device.read_status();
+    const bool first = !previous.has_value();
+    const bool changed = first || cyberpower::status_changed(*previous, status);
+    if (!filter || changed) {
+      cp_status view{};
+      fill_status(&view, status);
+      callback(&view, changed ? 1 : 0, user_data);
+      cp_ups_status_free(&view);
+    }
+    previous = status;
+
+    auto remaining = interval;
+    constexpr auto kSlice = std::chrono::milliseconds(50);
+    while (remaining.count() > 0 && !*stop_flag) {
+      const auto step = remaining < kSlice ? remaining : kSlice;
+      std::this_thread::sleep_for(step);
+      remaining -= step;
+    }
+  }
 }
 
 }  // extern "C"

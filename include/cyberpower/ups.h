@@ -82,6 +82,18 @@ int cp_ups_buzzer_test(cp_ups* ups);
 /* Serial transact. response is malloc'd. Returns the Error numeric value. */
 int cp_ups_transact(cp_ups* ups, const char* command, char** response);
 
+/* Blocking status monitor on the calling thread (no background worker).
+   Invokes callback for the first sample and then according to only_on_change.
+   stop_flag is polled each iteration; set it non-zero (e.g. from SIGINT) to
+   return. The cp_status pointer is valid only during the callback. */
+typedef void (*cp_ups_monitor_cb)(const cp_status* status, int changed, void* user_data);
+void cp_ups_monitor(cp_ups* ups,
+                    int interval_ms,
+                    int only_on_change,
+                    volatile int* stop_flag,
+                    cp_ups_monitor_cb callback,
+                    void* user_data);
+
 #ifdef __cplusplus
 }
 #endif

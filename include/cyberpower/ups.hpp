@@ -3,7 +3,10 @@
 #include "cyberpower/errors.hpp"
 #include "cyberpower/protocol.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -55,6 +58,18 @@ struct Status {
   protocol::StatusFrame frame;
 };
 
+// True when engineering fields (or ok/error/raw) differ enough to report.
+// Numeric fields use a small absolute epsilon (~0.05).
+bool status_changed(const Status& previous, const Status& current);
+
+// Options for Ups::monitor(). Runs on the calling thread (no internal worker).
+struct MonitorOptions {
+  std::chrono::milliseconds interval{std::chrono::seconds(2)};
+  // When true, the callback runs for the first sample and whenever
+  // status_changed() is true. When false, the callback runs every poll.
+  bool only_on_change = true;
+};
+
 // One open UPS. Platform handles live in the .cpp files; this type does
 // not mention IOKit or Win32.
 class Ups {
@@ -71,6 +86,13 @@ class Ups {
   // HID: read Power Device / Battery usages.
   // Serial: write "D\r" and parse the '#' frame.
   Status read_status();
+
+  // Blocking poll loop on the calling thread. Returns when stop_flag is true.
+  // Sleep is interruptible in ~50 ms slices so Ctrl-C / stop_flag reacts quickly.
+  // Does not start a background thread — call from your own thread if needed.
+  void monitor(MonitorOptions options,
+               const std::function<void(const Status&)>& callback,
+               std::atomic<bool>& stop_flag);
 
   // --- High-level serial commands (High-confidence recovered literals) ---
   // All of these are serial-only. HID devices return Error::NotSupported.

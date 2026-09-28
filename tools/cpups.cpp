@@ -1,19 +1,31 @@
 #include "cyberpower/protocol.hpp"
 #include "cyberpower/ups.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
 namespace {
 
+std::atomic<bool> g_stop{false};
+
+void on_signal(int) { g_stop.store(true, std::memory_order_relaxed); }
+
 void usage(const char* argv0) {
-  std::cerr << "Usage: " << argv0 << " [--self-test] [--json]\n"
-            << "  (default)     list CyberPower UPS devices and print status\n"
-            << "  --self-test   run protocol parser checks without hardware\n"
-            << "  --json        print status as JSON\n";
+  std::cerr << "Usage: " << argv0 << " [options]\n"
+            << "  (default)       list CyberPower UPS devices and print status\n"
+            << "  --self-test     run protocol parser checks without hardware\n"
+            << "  --json          print status as JSON (or JSON lines with --monitor)\n"
+            << "  --monitor       poll the first UPS and print live status\n"
+            << "  --interval MS   monitor poll interval in milliseconds (default: 2000)\n"
+            << "  --every-poll    with --monitor, print every sample (default: on change)\n";
 }
 
 const char* transport_name(cyberpower::TransportKind kind) {
@@ -104,6 +116,28 @@ void json_opt_bool(std::ostream& out, const char* key, const std::optional<bool>
   }
 }
 
+void print_status_json_object(std::ostream& out, const cyberpower::Status& status) {
+  out << '{';
+  bool first = true;
+  out << "\"ok\":" << (status.ok ? "true" : "false");
+  first = false;
+  out << ",\"error\":\"" << json_escape(cyberpower::error_name(status.error)) << '"';
+  out << ",\"message\":\"" << json_escape(status.message) << '"';
+  out << ",\"raw\":\"" << json_escape(status.raw) << '"';
+  json_opt_number(out, "battery_percent", status.battery_percent, first);
+  json_opt_number(out, "input_voltage_v", status.input_voltage_v, first);
+  json_opt_number(out, "output_voltage_v", status.output_voltage_v, first);
+  json_opt_number(out, "load_percent", status.load_percent, first);
+  json_opt_number(out, "runtime_seconds", status.runtime_seconds, first);
+  json_opt_number(out, "frequency_hz", status.frequency_hz, first);
+  json_opt_number(out, "temperature_c", status.temperature_c, first);
+  json_opt_number(out, "battery_voltage_v", status.battery_voltage_v, first);
+  json_opt_bool(out, "ac_present", status.ac_present, first);
+  json_opt_bool(out, "charging", status.charging, first);
+  json_opt_bool(out, "discharging", status.discharging, first);
+  out << '}';
+}
+
 void print_device_json(std::ostream& out, const cyberpower::DeviceInfo& device,
                        const cyberpower::Status* status, const std::string* open_error) {
   out << '{';
@@ -138,25 +172,75 @@ void print_device_json(std::ostream& out, const cyberpower::DeviceInfo& device,
   }
 
   if (!first) out << ',';
-  out << "\"status\":{";
-  bool sfirst = true;
-  out << "\"ok\":" << (status->ok ? "true" : "false");
-  sfirst = false;
-  out << ",\"error\":\"" << json_escape(cyberpower::error_name(status->error)) << '"';
-  out << ",\"message\":\"" << json_escape(status->message) << '"';
-  out << ",\"raw\":\"" << json_escape(status->raw) << '"';
-  json_opt_number(out, "battery_percent", status->battery_percent, sfirst);
-  json_opt_number(out, "input_voltage_v", status->input_voltage_v, sfirst);
-  json_opt_number(out, "output_voltage_v", status->output_voltage_v, sfirst);
-  json_opt_number(out, "load_percent", status->load_percent, sfirst);
-  json_opt_number(out, "runtime_seconds", status->runtime_seconds, sfirst);
-  json_opt_number(out, "frequency_hz", status->frequency_hz, sfirst);
-  json_opt_number(out, "temperature_c", status->temperature_c, sfirst);
-  json_opt_number(out, "battery_voltage_v", status->battery_voltage_v, sfirst);
-  json_opt_bool(out, "ac_present", status->ac_present, sfirst);
-  json_opt_bool(out, "charging", status->charging, sfirst);
-  json_opt_bool(out, "discharging", status->discharging, sfirst);
-  out << "}}";
+  out << "\"status\":";
+  print_status_json_object(out, *status);
+  out << '}';
+}
+
+std::string format_opt(const std::optional<double>& value, const char* suffix) {
+  if (!value) return "n/a";
+  std::ostringstream out;
+  out << *value;
+  if (suffix) out << suffix;
+  return out.str();
+}
+
+std::string format_monitor_line(const cyberpower::Status& status) {
+  std::ostringstream out;
+  out << "bat=" << format_opt(status.battery_percent, "%")
+      << "  in=" << format_opt(status.input_voltage_v, "V")
+      << "  out=" << format_opt(status.output_voltage_v, "V")
+      << "  load=" << format_opt(status.load_percent, "%")
+      << "  runtime=" << format_opt(status.runtime_seconds, "s");
+  if (status.ac_present) out << "  ac=" << (*status.ac_present ? "yes" : "no");
+  if (status.charging) out << "  chg=" << (*status.charging ? "yes" : "no");
+  if (status.discharging) out << "  dis=" << (*status.discharging ? "yes" : "no");
+  if (!status.ok) {
+    out << "  err=" << cyberpower::error_name(status.error);
+    if (!status.message.empty()) out << "(" << status.message << ")";
+  }
+  return out.str();
+}
+
+int run_monitor(cyberpower::Ups& ups, int interval_ms, bool only_on_change, bool json) {
+  std::signal(SIGINT, on_signal);
+#ifdef SIGTERM
+  std::signal(SIGTERM, on_signal);
+#endif
+
+  const auto& info = ups.info();
+  if (!json) {
+    std::cerr << "monitoring " << transport_name(info.transport) << " " << info.path
+              << " every " << interval_ms << " ms"
+              << (only_on_change ? " (on change)" : " (every poll)")
+              << "; Ctrl-C to stop\n";
+  }
+
+  cyberpower::MonitorOptions options;
+  options.interval = std::chrono::milliseconds(interval_ms);
+  options.only_on_change = only_on_change;
+
+  bool used_carriage_return = false;
+  ups.monitor(
+      options,
+      [&](const cyberpower::Status& status) {
+        if (json) {
+          print_status_json_object(std::cout, status);
+          std::cout << "\n" << std::flush;
+          return;
+        }
+        const std::string line = format_monitor_line(status);
+        if (only_on_change) {
+          std::cout << line << "\n" << std::flush;
+        } else {
+          std::cout << "\r" << line << "          " << std::flush;
+          used_carriage_return = true;
+        }
+      },
+      g_stop);
+
+  if (used_carriage_return) std::cout << "\n";
+  return 0;
 }
 
 }  // namespace
@@ -164,12 +248,30 @@ void print_device_json(std::ostream& out, const cyberpower::DeviceInfo& device,
 int main(int argc, char** argv) {
   bool self_test_only = false;
   bool json = false;
+  bool monitor = false;
+  bool every_poll = false;
+  int interval_ms = 2000;
+
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     if (arg == "--self-test") {
       self_test_only = true;
     } else if (arg == "--json") {
       json = true;
+    } else if (arg == "--monitor") {
+      monitor = true;
+    } else if (arg == "--every-poll") {
+      every_poll = true;
+    } else if (arg == "--interval") {
+      if (i + 1 >= argc) {
+        usage(argv[0]);
+        return 2;
+      }
+      interval_ms = std::atoi(argv[++i]);
+      if (interval_ms <= 0) {
+        std::cerr << "invalid --interval; expected positive milliseconds\n";
+        return 2;
+      }
     } else if (arg == "-h" || arg == "--help") {
       usage(argv[0]);
       return 0;
@@ -194,6 +296,21 @@ int main(int argc, char** argv) {
   }
 
   const std::vector<cyberpower::DeviceInfo> devices = cyberpower::list_devices();
+
+  if (monitor) {
+    if (devices.empty()) {
+      std::cerr << "No CyberPower HID device (vendor 0x0764) or matching serial node was found.\n";
+      return 1;
+    }
+    std::string error;
+    std::optional<cyberpower::Ups> ups = cyberpower::open_device(devices[0], &error);
+    if (!ups) {
+      std::cerr << "open failed: " << error << "\n";
+      return 1;
+    }
+    return run_monitor(*ups, interval_ms, !every_poll, json);
+  }
+
   if (json) {
     std::cout << "{\"devices\":[";
     for (std::size_t i = 0; i < devices.size(); ++i) {

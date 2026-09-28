@@ -18,6 +18,7 @@ For protocol internals, recovered constants, and confidence annotations, see **[
 - Device discovery (USB HID + serial ports)
 - Status polling (voltage, load, battery %, runtime, AC present, and more)
 - High-level serial commands (self-test, cancel test, toggle buzzer, rating, …)
+- Polling monitor API (`Ups::monitor`) and `cpups --monitor`
 - JSON output via the `cpups` CLI
 - Recovered text protocol (v1 / v2e / titan) and v3 binary framing
 - HID Power Device / Battery usage support
@@ -38,6 +39,12 @@ cmake --build build
 
 # JSON output
 ./build/cpups --json
+
+# Live monitor (first device; Ctrl-C to stop)
+./build/cpups --monitor
+./build/cpups --monitor --interval 1000
+./build/cpups --monitor --json          # JSON lines on change
+./build/cpups --monitor --every-poll    # print every sample
 ```
 
 `cpups` is the day-to-day CLI. `examples/list_and_status` is a thinner library sample if you want a starting point for your own code.
@@ -107,7 +114,30 @@ int main() {
 }
 ```
 
-A pure C API is also available in `cyberpower/ups.h` (`cp_ups_self_test`, `cp_ups_toggle_buzzer`, …).
+### Monitor API
+
+`Ups::monitor()` is a **blocking** poll loop on the calling thread (no background worker). Set `stop_flag` to leave the loop — sleep is interruptible in ~50 ms slices.
+
+```cpp
+#include <atomic>
+#include <chrono>
+#include <iostream>
+
+std::atomic<bool> stop{false};
+cyberpower::MonitorOptions opts;
+opts.interval = std::chrono::seconds(2);
+opts.only_on_change = true;  // first sample + meaningful changes
+
+ups->monitor(opts, [](const cyberpower::Status& s) {
+  if (s.battery_percent) {
+    std::cout << "battery " << *s.battery_percent << "%\n";
+  }
+}, stop);
+```
+
+`cyberpower::status_changed(prev, next)` compares engineering fields (with a small numeric epsilon). The C API mirror is `cp_ups_monitor(...)` with a `volatile int* stop_flag`.
+
+A pure C API is also available in `cyberpower/ups.h` (`cp_ups_self_test`, `cp_ups_toggle_buzzer`, `cp_ups_monitor`, …).
 
 ### Headers
 
