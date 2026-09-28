@@ -18,16 +18,6 @@ std::atomic<bool> g_stop{false};
 
 void on_signal(int) { g_stop.store(true, std::memory_order_relaxed); }
 
-void usage(const char* argv0) {
-  std::cerr << "Usage: " << argv0 << " [options]\n"
-            << "  (default)       list CyberPower UPS devices and print status\n"
-            << "  --self-test     run protocol parser checks without hardware\n"
-            << "  --json          print status as JSON (or JSON lines with --monitor)\n"
-            << "  --monitor       poll the first UPS and print live status\n"
-            << "  --interval MS   monitor poll interval in milliseconds (default: 2000)\n"
-            << "  --every-poll    with --monitor, print every sample (default: on change)\n";
-}
-
 const char* transport_name(cyberpower::TransportKind kind) {
   return kind == cyberpower::TransportKind::Serial ? "serial" : "hid";
 }
@@ -54,6 +44,103 @@ std::string json_escape(const std::string& text) {
     }
   }
   return out;
+}
+
+void usage(const char* argv0) {
+  std::cerr << "Usage: " << argv0 << " [options]\n"
+            << "  (default)            list CyberPower UPS devices and print status\n"
+            << "  --self-test          run protocol parser checks without hardware\n"
+            << "  --json               print status/command result as JSON\n"
+            << "  --monitor            poll the first UPS and print live status\n"
+            << "  --interval MS        monitor poll interval in milliseconds (default: 2000)\n"
+            << "  --every-poll         with --monitor, print every sample (default: on change)\n"
+            << "\n"
+            << "  Device commands (first UPS; serial protocols; HID returns NotSupported):\n"
+            << "  --test, --self-test-device   quick battery / self-test\n"
+            << "  --cancel-test                cancel battery / self-test\n"
+            << "  --buzzer, --beep             toggle audible alarm\n"
+            << "  --rating                     query rating / form factor\n"
+            << "  --cancel-schedule            cancel pending schedule\n"
+            << "  --calibrate                  battery calibration\n"
+            << "  --indicator-test             front-panel LED test\n"
+            << "  --buzzer-test                buzzer test\n";
+}
+
+enum class DeviceAction {
+  None,
+  SelfTest,
+  CancelTest,
+  ToggleBuzzer,
+  Rating,
+  CancelSchedule,
+  Calibrate,
+  IndicatorTest,
+  BuzzerTest,
+};
+
+const char* device_action_name(DeviceAction action) {
+  switch (action) {
+    case DeviceAction::SelfTest: return "self_test";
+    case DeviceAction::CancelTest: return "cancel_test";
+    case DeviceAction::ToggleBuzzer: return "toggle_buzzer";
+    case DeviceAction::Rating: return "rating";
+    case DeviceAction::CancelSchedule: return "cancel_schedule";
+    case DeviceAction::Calibrate: return "calibrate";
+    case DeviceAction::IndicatorTest: return "indicator_test";
+    case DeviceAction::BuzzerTest: return "buzzer_test";
+    case DeviceAction::None: return "none";
+  }
+  return "none";
+}
+
+bool set_device_action(DeviceAction& current, DeviceAction next) {
+  if (current != DeviceAction::None && current != next) {
+    std::cerr << "only one device command may be specified at a time\n";
+    return false;
+  }
+  current = next;
+  return true;
+}
+
+int run_device_action(cyberpower::Ups& ups, DeviceAction action, bool json) {
+  cyberpower::Error error = cyberpower::Error::Ok;
+  std::string rating;
+
+  switch (action) {
+    case DeviceAction::SelfTest: error = ups.self_test(); break;
+    case DeviceAction::CancelTest: error = ups.cancel_test(); break;
+    case DeviceAction::ToggleBuzzer: error = ups.toggle_buzzer(); break;
+    case DeviceAction::Rating: error = ups.read_rating(rating); break;
+    case DeviceAction::CancelSchedule: error = ups.cancel_schedule(); break;
+    case DeviceAction::Calibrate: error = ups.calibrate(); break;
+    case DeviceAction::IndicatorTest: error = ups.indicator_test(); break;
+    case DeviceAction::BuzzerTest: error = ups.buzzer_test(); break;
+    case DeviceAction::None: return 0;
+  }
+
+  const bool ok = error == cyberpower::Error::Ok;
+  if (json) {
+    std::cout << "{\"command\":\"" << device_action_name(action) << "\""
+              << ",\"ok\":" << (ok ? "true" : "false")
+              << ",\"error\":\"" << json_escape(cyberpower::error_name(error)) << "\""
+              << ",\"path\":\"" << json_escape(ups.info().path) << "\""
+              << ",\"transport\":\"" << transport_name(ups.info().transport) << "\""
+              << ",\"response\":\"" << json_escape(rating) << "\"}\n";
+  } else {
+    std::cout << device_action_name(action) << " on "
+              << transport_name(ups.info().transport) << " " << ups.info().path
+              << ": " << (ok ? "ok" : cyberpower::error_name(error)) << "\n";
+    if (action == DeviceAction::Rating) {
+      std::cout << "rating: ";
+      if (rating.empty()) {
+        std::cout << "(empty)\n";
+      } else {
+        std::cout << rating;
+        if (rating.back() != '\n') std::cout << "\n";
+      }
+    }
+  }
+  return ok ? 0 : 1;
 }
 
 void print_opt(const char* label, const std::optional<double>& value, const char* unit) {
@@ -251,6 +338,7 @@ int main(int argc, char** argv) {
   bool monitor = false;
   bool every_poll = false;
   int interval_ms = 2000;
+  DeviceAction device_action = DeviceAction::None;
 
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -272,6 +360,22 @@ int main(int argc, char** argv) {
         std::cerr << "invalid --interval; expected positive milliseconds\n";
         return 2;
       }
+    } else if (arg == "--test" || arg == "--self-test-device") {
+      if (!set_device_action(device_action, DeviceAction::SelfTest)) return 2;
+    } else if (arg == "--cancel-test") {
+      if (!set_device_action(device_action, DeviceAction::CancelTest)) return 2;
+    } else if (arg == "--buzzer" || arg == "--beep") {
+      if (!set_device_action(device_action, DeviceAction::ToggleBuzzer)) return 2;
+    } else if (arg == "--rating") {
+      if (!set_device_action(device_action, DeviceAction::Rating)) return 2;
+    } else if (arg == "--cancel-schedule") {
+      if (!set_device_action(device_action, DeviceAction::CancelSchedule)) return 2;
+    } else if (arg == "--calibrate") {
+      if (!set_device_action(device_action, DeviceAction::Calibrate)) return 2;
+    } else if (arg == "--indicator-test") {
+      if (!set_device_action(device_action, DeviceAction::IndicatorTest)) return 2;
+    } else if (arg == "--buzzer-test") {
+      if (!set_device_action(device_action, DeviceAction::BuzzerTest)) return 2;
     } else if (arg == "-h" || arg == "--help") {
       usage(argv[0]);
       return 0;
@@ -279,6 +383,11 @@ int main(int argc, char** argv) {
       usage(argv[0]);
       return 2;
     }
+  }
+
+  if (monitor && device_action != DeviceAction::None) {
+    std::cerr << "--monitor cannot be combined with a device command\n";
+    return 2;
   }
 
   std::string detail;
@@ -297,7 +406,7 @@ int main(int argc, char** argv) {
 
   const std::vector<cyberpower::DeviceInfo> devices = cyberpower::list_devices();
 
-  if (monitor) {
+  if (monitor || device_action != DeviceAction::None) {
     if (devices.empty()) {
       std::cerr << "No CyberPower HID device (vendor 0x0764) or matching serial node was found.\n";
       return 1;
@@ -308,7 +417,10 @@ int main(int argc, char** argv) {
       std::cerr << "open failed: " << error << "\n";
       return 1;
     }
-    return run_monitor(*ups, interval_ms, !every_poll, json);
+    if (monitor) {
+      return run_monitor(*ups, interval_ms, !every_poll, json);
+    }
+    return run_device_action(*ups, device_action, json);
   }
 
   if (json) {

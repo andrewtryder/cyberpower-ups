@@ -45,6 +45,17 @@ cmake --build build
 ./build/cpups --monitor --interval 1000
 ./build/cpups --monitor --json          # JSON lines on change
 ./build/cpups --monitor --every-poll    # print every sample
+
+# Device commands (first UPS; serial; HID returns NotSupported)
+./build/cpups --test                    # or --self-test-device
+./build/cpups --cancel-test
+./build/cpups --buzzer                  # or --beep
+./build/cpups --rating
+./build/cpups --cancel-schedule
+./build/cpups --calibrate
+./build/cpups --indicator-test
+./build/cpups --buzzer-test
+./build/cpups --rating --json
 ```
 
 `cpups` is the day-to-day CLI. `examples/list_and_status` is a thinner library sample if you want a starting point for your own code.
