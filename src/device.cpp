@@ -18,6 +18,29 @@ const DeviceInfo& Ups::info() const { return impl_->transport->info(); }
 
 Status Ups::read_status() { return impl_->transport->read_status(); }
 
+Error Ups::send_command(const char* command) {
+  std::string unused;
+  return impl_->transport->transact(command, unused);
+}
+
+Error Ups::self_test() { return send_command(protocol::cmd::kBatteryTestQuick); }
+
+Error Ups::cancel_test() { return send_command(protocol::cmd::kCancelOrSelfTest); }
+
+Error Ups::toggle_buzzer() { return send_command(protocol::cmd::kToggleBuzzer); }
+
+Error Ups::read_rating(std::string& response) {
+  return impl_->transport->transact(protocol::cmd::kRating, response);
+}
+
+Error Ups::cancel_schedule() { return send_command(protocol::cmd::kCancelSchedule); }
+
+Error Ups::calibrate() { return send_command(protocol::cmd::kBatteryCalibrate); }
+
+Error Ups::indicator_test() { return send_command(protocol::cmd::kIndicatorTest); }
+
+Error Ups::buzzer_test() { return send_command(protocol::cmd::kBuzzerTest); }
+
 Error Ups::transact(const std::string& command, std::string& response) {
   return impl_->transport->transact(command, response);
 }

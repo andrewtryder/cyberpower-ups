@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  macos:
+    name: macOS build + self-test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Protocol self-test
+        run: ./build/cpups --self-test
+
+      - name: Install (prefix)
+        run: |
+          cmake --install build --prefix "$PWD/install-prefix"
+          test -f install-prefix/include/cyberpower/ups.hpp
+          test -f install-prefix/lib/cmake/cyberpower-ups/cyberpower-upsConfig.cmake
+          test -f install-prefix/lib/pkgconfig/cyberpower-ups.pc
+          test -x install-prefix/bin/cpups
+
+  ubuntu-stub:
+    name: Ubuntu stub build + self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake g++
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Protocol self-test
+        run: ./build/cpups --self-test

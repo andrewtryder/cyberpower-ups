@@ -128,6 +128,49 @@ void cp_ups_status_free(cp_status* status) {
   status->raw = nullptr;
 }
 
+int cp_ups_self_test(cp_ups* ups) {
+  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
+  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.self_test());
+}
+
+int cp_ups_cancel_test(cp_ups* ups) {
+  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
+  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.cancel_test());
+}
+
+int cp_ups_toggle_buzzer(cp_ups* ups) {
+  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
+  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.toggle_buzzer());
+}
+
+int cp_ups_read_rating(cp_ups* ups, char** rating_out) {
+  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
+  std::string reply;
+  const cyberpower::Error error = reinterpret_cast<Session*>(ups)->ups.read_rating(reply);
+  if (rating_out) *rating_out = dup_cstr(reply);
+  return static_cast<int>(error);
+}
+
+int cp_ups_cancel_schedule(cp_ups* ups) {
+  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
+  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.cancel_schedule());
+}
+
+int cp_ups_calibrate(cp_ups* ups) {
+  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
+  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.calibrate());
+}
+
+int cp_ups_indicator_test(cp_ups* ups) {
+  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
+  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.indicator_test());
+}
+
+int cp_ups_buzzer_test(cp_ups* ups) {
+  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
+  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.buzzer_test());
+}
+
 int cp_ups_transact(cp_ups* ups, const char* command, char** response) {
   if (ups == nullptr || command == nullptr) return static_cast<int>(cyberpower::Error::Io);
   std::string reply;

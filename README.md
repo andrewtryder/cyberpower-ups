@@ -5,7 +5,7 @@ A modern C++17 library and command-line tool for talking to CyberPower UPS devic
 The wire protocol was recovered by static analysis of PowerPanel Personal’s native driver (`libppbedrvc.dylib`). This library does **not** link or depend on that dylib — it speaks to the hardware directly.
 
 - Works today on **macOS** (IOKit HID + termios)
-- Windows port is prepared (platform layer is isolated)
+- Windows / Linux builds compile against a transport stub (platform layer is isolated)
 - Clean public C++ and C APIs so you can use it from other applications
 - Direct device access only (no network / TCP/IP card required)
 
@@ -17,8 +17,8 @@ For protocol internals, recovered constants, and confidence annotations, see **[
 
 - Device discovery (USB HID + serial ports)
 - Status polling (voltage, load, battery %, runtime, AC present, and more)
-- Self-test command
-- JSON output
+- High-level serial commands (self-test, cancel test, toggle buzzer, rating, …)
+- JSON output via the `cpups` CLI
 - Recovered text protocol (v1 / v2e / titan) and v3 binary framing
 - HID Power Device / Battery usage support
 
@@ -42,9 +42,40 @@ cmake --build build
 
 `cpups` is the day-to-day CLI. `examples/list_and_status` is a thinner library sample if you want a starting point for your own code.
 
+### Install
+
+```bash
+cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr/local
+cmake --build build
+cmake --install build
+```
+
+This installs:
+
+- `libcyberpower-ups` (static library)
+- public headers under `include/cyberpower/`
+- the `cpups` binary
+- CMake package config under `lib/cmake/cyberpower-ups/`
+- pkg-config file `lib/pkgconfig/cyberpower-ups.pc`
+
 ---
 
 ## Using the Library
+
+### From CMake (`find_package`)
+
+```cmake
+find_package(cyberpower-ups REQUIRED)
+target_link_libraries(myapp PRIVATE cyberpower-ups::cyberpower-ups)
+```
+
+### From pkg-config
+
+```bash
+pkg-config --cflags --libs cyberpower-ups
+```
+
+### C++ example
 
 ```cpp
 #include <cyberpower/ups.hpp>
@@ -58,12 +89,25 @@ int main() {
   }
 
   auto ups = cyberpower::open_device(devices[0]);
+  if (!ups) {
+    std::cerr << "Failed to open device\n";
+    return 1;
+  }
+
   auto status = ups->read_status();
-  std::cout << "Battery: " << status.battery_percent << "%\n";
+  if (status.battery_percent) {
+    std::cout << "Battery: " << *status.battery_percent << "%\n";
+  }
+
+  // Serial-only helpers (HID returns NotSupported):
+  // ups->self_test();
+  // ups->cancel_test();
+  // ups->toggle_buzzer();
+  // std::string rating; ups->read_rating(rating);
 }
 ```
 
-A pure C API is also available in `cyberpower/ups.h`.
+A pure C API is also available in `cyberpower/ups.h` (`cp_ups_self_test`, `cp_ups_toggle_buzzer`, …).
 
 ### Headers
 
@@ -83,9 +127,10 @@ cyberpower-ups/
 ├── include/cyberpower/   # Public headers
 ├── src/
 │   ├── platform/macos/   # IOKit + termios
-│   └── platform/windows/ # Stub (ready for SetupAPI + COM)
+│   └── platform/windows/ # Stub / extension points for SetupAPI + COM
 ├── tools/cpups.cpp       # Command-line tool
 ├── examples/             # Library samples
+├── cmake/                # Package config + pkg-config templates
 ├── PROTOCOL.md           # Protocol notes & reverse-engineering detail
 └── CMakeLists.txt
 ```

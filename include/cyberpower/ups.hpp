@@ -72,12 +72,43 @@ class Ups {
   // Serial: write "D\r" and parse the '#' frame.
   Status read_status();
 
+  // --- High-level serial commands (High-confidence recovered literals) ---
+  // All of these are serial-only. HID devices return Error::NotSupported.
+  // Response (if any) is discarded unless noted; use transact() for raw I/O.
+
+  // Quick battery / self-test: "T\r" (v2e, titan). High.
+  Error self_test();
+
+  // Cancel battery / self-test: "CT\r" (v1, v2e, titan). High.
+  Error cancel_test();
+
+  // Toggle audible alarm: "B\r" (v1). High.
+  Error toggle_buzzer();
+
+  // Rating / form factor query: "F\r" (v1, titan). High.
+  // On success, `response` holds the device reply (including trailing CR).
+  Error read_rating(std::string& response);
+
+  // Cancel pending schedule: "C\r" (v2e, titan). High.
+  Error cancel_schedule();
+
+  // Battery calibration: "TL\r" (v2e, titan). High.
+  Error calibrate();
+
+  // Indicator / front-panel LED test: "TI\r" (v2e). High.
+  Error indicator_test();
+
+  // Buzzer test: "TB\r" (v2e). High.
+  Error buzzer_test();
+
   // Serial only. `command` may already end in CR; otherwise CR is appended
   // (v2e delimiter is 0x0D). HID devices return Error::NotSupported.
   // The returned string includes the trailing CR when the device sent one.
   Error transact(const std::string& command, std::string& response);
 
  private:
+  // Helper for fire-and-forget serial commands that share a recovered literal.
+  Error send_command(const char* command);
   struct Impl;
   explicit Ups(std::unique_ptr<Impl> impl);
   std::unique_ptr<Impl> impl_;
@@ -89,6 +120,6 @@ class Ups {
 // nodes whose names match the driver's port filters.
 std::vector<DeviceInfo> list_devices();
 
-std::optional<Ups> open_device(const DeviceInfo& info, std::string* error);
+std::optional<Ups> open_device(const DeviceInfo& info, std::string* error = nullptr);
 
 }  // namespace cyberpower
