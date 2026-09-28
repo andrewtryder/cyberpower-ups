@@ -35,14 +35,16 @@ int cf_int(CFTypeRef value) {
 bool ancestor_is(IOHIDElementRef element, uint32_t page, uint32_t usage) {
   for (IOHIDElementRef parent = IOHIDElementGetParent(element); parent != nullptr;
        parent = IOHIDElementGetParent(parent)) {
-    if (IOHIDElementGetUsagePage(parent) == page && IOHIDElementGetUsage(parent) == usage) return true;
+    if (IOHIDElementGetUsagePage(parent) == page && IOHIDElementGetUsage(parent) == usage)
+      return true;
   }
   return false;
 }
 
 bool read_physical(IOHIDDeviceRef device, IOHIDElementRef element, double& out) {
   IOHIDValueRef value = nullptr;
-  if (IOHIDDeviceGetValue(device, element, &value) != kIOReturnSuccess || value == nullptr) return false;
+  if (IOHIDDeviceGetValue(device, element, &value) != kIOReturnSuccess || value == nullptr)
+    return false;
   out = IOHIDValueGetScaledValue(value, kIOHIDValueScaleTypePhysical);
   const CFIndex logical = IOHIDValueGetIntegerValue(value);
   // Some CyberPower reports leave the unit exponent at 0, so the physical
@@ -61,11 +63,14 @@ IOHIDElementRef find_control_element(IOHIDDeviceRef device, uint32_t page, uint3
   IOHIDElementType best_type = kIOHIDElementTypeInput_Misc;
   const CFIndex count = CFArrayGetCount(elements);
   for (CFIndex i = 0; i < count; ++i) {
-    auto* element = static_cast<IOHIDElementRef>(const_cast<void*>(CFArrayGetValueAtIndex(elements, i)));
-    if (IOHIDElementGetUsagePage(element) != page || IOHIDElementGetUsage(element) != usage) continue;
+    auto* element = static_cast<IOHIDElementRef>(
+        const_cast<void*>(CFArrayGetValueAtIndex(elements, i)));
+    if (IOHIDElementGetUsagePage(element) != page || IOHIDElementGetUsage(element) != usage)
+      continue;
     const IOHIDElementType type = IOHIDElementGetType(element);
     if (type != kIOHIDElementTypeFeature && type != kIOHIDElementTypeOutput) continue;
-    if (best == nullptr || (type == kIOHIDElementTypeFeature && best_type != kIOHIDElementTypeFeature)) {
+    if (best == nullptr ||
+        (type == kIOHIDElementTypeFeature && best_type != kIOHIDElementTypeFeature)) {
       best = element;
       best_type = type;
     }
@@ -81,9 +86,12 @@ class HidTransport : public Transport {
       : manager_(manager), device_(device), info_(std::move(info)) {
     CFRetain(manager_);
     CFRetain(device_);
-    alarm_element_ = find_control_element(device_, protocol::kPagePowerDevice, protocol::kUsageAudibleAlarmControl);
-    test_element_ = find_control_element(device_, protocol::kPagePowerDevice, protocol::kUsageTest);
-    IOHIDDeviceRegisterInputReportCallback(device_, report_, sizeof report_, &HidTransport::on_report, this);
+    alarm_element_ = find_control_element(device_, protocol::kPagePowerDevice,
+                                          protocol::kUsageAudibleAlarmControl);
+    test_element_  = find_control_element(device_, protocol::kPagePowerDevice,
+                                          protocol::kUsageTest);
+    IOHIDDeviceRegisterInputReportCallback(device_, report_, sizeof report_,
+                                           &HidTransport::on_report, this);
     IOHIDDeviceScheduleWithRunLoop(device_, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
     // Let the run loop deliver the first input report into the element cache.
     CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
@@ -94,7 +102,7 @@ class HidTransport : public Transport {
     IOHIDDeviceRegisterInputReportCallback(device_, report_, sizeof report_, nullptr, nullptr);
     IOHIDDeviceClose(device_, kIOHIDOptionsTypeNone);
     if (alarm_element_ != nullptr) CFRelease(alarm_element_);
-    if (test_element_ != nullptr) CFRelease(test_element_);
+    if (test_element_  != nullptr) CFRelease(test_element_);
     CFRelease(device_);
     IOHIDManagerUnscheduleFromRunLoop(manager_, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
     IOHIDManagerClose(manager_, kIOHIDOptionsTypeNone);
@@ -116,6 +124,7 @@ class HidTransport : public Transport {
       return status;
     }
 
+    // Core fields
     double input_v = 0, output_v = 0, battery_v = 0, load = 0, freq = 0, temp = 0;
     double remain = 0, full = 0, runtime = 0;
     bool got_input = false, got_output = false, got_battery_v = false;
@@ -123,74 +132,156 @@ class HidTransport : public Transport {
     bool got_remain = false, got_full = false, got_runtime = false;
     int loose_voltage = 0;
 
+    // Extended HID fields (new usages from UsageMapping RE)
+    double cycle_count_val = 0, sensitivity_val = 0;
+    double shutdown_delay_val = 0, restore_delay_val = 0;
+    bool got_cycle = false, got_sensitivity = false;
+    bool got_shutdown = false, got_restore = false;
+    bool got_need_repl = false, need_repl_val = false;
+
     const CFIndex count = CFArrayGetCount(elements);
     for (CFIndex i = 0; i < count; ++i) {
-      auto* element = static_cast<IOHIDElementRef>(const_cast<void*>(CFArrayGetValueAtIndex(elements, i)));
-      const uint32_t page = IOHIDElementGetUsagePage(element);
+      auto* element = static_cast<IOHIDElementRef>(
+          const_cast<void*>(CFArrayGetValueAtIndex(elements, i)));
+      const uint32_t page  = IOHIDElementGetUsagePage(element);
       const uint32_t usage = IOHIDElementGetUsage(element);
+      const IOHIDElementType type = IOHIDElementGetType(element);
+      const uint32_t report_id = IOHIDElementGetReportID(element);
+      
       double value = 0;
       if (!read_physical(device_, element, value)) continue;
 
+      const char* type_str = (type == kIOHIDElementTypeInput_Misc ||
+                              type == kIOHIDElementTypeInput_Button ||
+                              type == kIOHIDElementTypeInput_Axis ||
+                              type == kIOHIDElementTypeInput_ScanCodes) ? "In" :
+                             (type == kIOHIDElementTypeFeature) ? "Feat" :
+                             (type == kIOHIDElementTypeOutput) ? "Out" : "Other";
+
+      const char* mapped_to = nullptr;
+
+      // Only map core status from Input elements
+      bool is_input = (type == kIOHIDElementTypeInput_Misc ||
+                       type == kIOHIDElementTypeInput_Button ||
+                       type == kIOHIDElementTypeInput_Axis ||
+                       type == kIOHIDElementTypeInput_ScanCodes);
+      // Removed the strict is_input requirement for core fields since CyberPower
+      // frequently maps status to Feature elements. We keep is_input just for logging
+      // if needed, but we don't filter on it.
+
+      // ---------------------------------------------------------------
+      // Power Device page (0x84)
+      // ---------------------------------------------------------------
       if (page == protocol::kPagePowerDevice && usage == 0x30) {
-        // Voltage. Parent collection decides input / output / battery. High
-        // that 0x84/0x30 is mapped; the parent test uses usages also mapped
-        // in the same function (0x1A, 0x1C, 0x12).
         if (ancestor_is(element, protocol::kPagePowerDevice, 0x1A)) {
-          input_v = value;
-          got_input = true;
+          input_v = value; got_input = true; mapped_to = "input_v";
         } else if (ancestor_is(element, protocol::kPagePowerDevice, 0x1C)) {
-          output_v = value;
-          got_output = true;
+          output_v = value; got_output = true; mapped_to = "output_v";
         } else if (ancestor_is(element, protocol::kPagePowerDevice, 0x12)) {
-          battery_v = value;
-          got_battery_v = true;
+          battery_v = value; got_battery_v = true; mapped_to = "battery_v";
         } else if (loose_voltage == 0) {
-          input_v = value;
-          got_input = true;
-          ++loose_voltage;
+          input_v = value; got_input = true; ++loose_voltage; mapped_to = "input_v(loose)";
         } else if (loose_voltage == 1) {
-          output_v = value;
-          got_output = true;
-          ++loose_voltage;
+          output_v = value; got_output = true; ++loose_voltage; mapped_to = "output_v(loose)";
         }
       } else if (page == protocol::kPagePowerDevice && usage == 0x35) {
-        load = value;
-        got_load = true;
+        load = value; got_load = true; mapped_to = "load(35_legacy)";
+      } else if (page == protocol::kPagePowerDevice && usage == protocol::kUsagePercentLoad) {
+        if (!got_load) { load = value; got_load = true; mapped_to = "load(65_new)"; }
       } else if (page == protocol::kPagePowerDevice && usage == 0x32) {
-        freq = value;
-        got_freq = true;
+        freq = value; got_freq = true; mapped_to = "freq";
       } else if (page == protocol::kPagePowerDevice && usage == 0x36) {
-        temp = value;
-        got_temp = true;
-      } else if (page == protocol::kPageBattery && usage == 0x66) {
-        remain = value;
-        got_remain = true;
+        temp = value; got_temp = true; mapped_to = "temp(older)";
+      } else if (page == protocol::kPagePowerDevice && usage == protocol::kUsageACPresent) {
+        if (value == 0.0 || value == 1.0) {
+          status.ac_present = value != 0.0;
+          mapped_to = "ac_present";
+        }
+
+      // ---------------------------------------------------------------
+      // Battery System page (0x85) — RE-confirmed primary usages
+      // ---------------------------------------------------------------
+      } else if (page == protocol::kPageBattery && usage == protocol::kUsageRemainingCapacity) {
+        // 0x85/0x2C is new. Only use if legacy 0x66 didn't map yet.
+        if (!got_remain) { remain = value; got_remain = true; mapped_to = "remain(2C_new)"; }
+      } else if (page == protocol::kPageBattery && usage == protocol::kUsageRunTimeToEmpty) {
+        // 0x85/0x8B is new.
+        if (!got_runtime) { runtime = value; got_runtime = true; mapped_to = "runtime(8B_new)"; }
+      } else if (page == protocol::kPageBattery && usage == protocol::kUsageFullChargeCapacity) {
+        full = value; got_full = true; mapped_to = "full_cap(8D)";
+      } else if (page == protocol::kPageBattery && usage == protocol::kUsageTemperatureBat) {
+        // Only use 0x67 if older temp wasn't set, and ignore 100°C which is a common dummy value.
+        if (!got_temp && value < 99.0) { temp = value; got_temp = true; mapped_to = "temp(67_new)"; }
+      } else if (page == protocol::kPageBattery && usage == protocol::kUsageCycleCount) {
+        cycle_count_val = value; got_cycle = true; mapped_to = "cycle_count(8C)";
+      } else if (page == protocol::kPageBattery && usage == protocol::kUsageNeedReplacement) {
+        if (value == 0.0 || value == 1.0) {
+          need_repl_val = value != 0.0; got_need_repl = true; mapped_to = "need_repl(29)";
+        }
+      } else if (page == protocol::kPageBattery && usage == protocol::kUsageCharging) { // 0x68
+        if (value == 0.0 || value == 1.0) {
+          status.charging = value != 0.0; mapped_to = "charging(68)";
+        } else if (value > 1.0) {
+          runtime = value; got_runtime = true; mapped_to = "runtime(68_legacy)";
+        }
+      } else if (page == protocol::kPageBattery && usage == protocol::kUsageDischarging) { // 0x66
+        if (value == 0.0 || value == 1.0) {
+          status.discharging = value != 0.0; mapped_to = "discharging(66)";
+        } else if (value > 1.0) {
+          remain = value; got_remain = true; mapped_to = "remain(66_legacy)";
+        }
+
+      // ---------------------------------------------------------------
+      // Battery System page (0x85) — older / alternative usages
+      // ---------------------------------------------------------------
       } else if (page == protocol::kPageBattery && usage == 0x67) {
-        full = value;
-        got_full = true;
-      } else if (page == protocol::kPageBattery && usage == 0x68) {
-        runtime = value;
-        got_runtime = true;
+        if (!got_full) { full = value; got_full = true; mapped_to = "full_cap(67_legacy)"; }
       } else if ((page == protocol::kPageBattery && usage == 0xD0) ||
                  (page == protocol::kPageVendorFf01 && usage == 0xD0)) {
-        status.ac_present = value != 0.0;
+        if (value == 0.0 || value == 1.0) {
+          status.ac_present = value != 0.0; mapped_to = "ac_present(alt)";
+        }
       } else if ((page == protocol::kPageBattery && (usage == 0x44 || usage == 0xD1)) ||
                  (page == protocol::kPageVendorFf01 && usage == 0xD1)) {
-        status.charging = value != 0.0;
+        if (value == 0.0 || value == 1.0) {
+          status.charging = value != 0.0; mapped_to = "charging(alt)";
+        }
       } else if ((page == protocol::kPageBattery && (usage == 0x45 || usage == 0xD2)) ||
                  (page == protocol::kPageVendorFf01 && usage == 0xD2)) {
-        status.discharging = value != 0.0;
+        if (value == 0.0 || value == 1.0) {
+          status.discharging = value != 0.0; mapped_to = "discharging(alt)";
+        }
+
+      // ---------------------------------------------------------------
+      // Vendor page 0xFF86 — config reads (High page/usage)
+      // ---------------------------------------------------------------
+      } else if (page == protocol::kPageVendorFf86) {
+        if (usage == protocol::kUsageVendorSensitivityRead) {
+          sensitivity_val = value; got_sensitivity = true; mapped_to = "sensitivity(FF86)";
+        } else if (usage == protocol::kUsageVendorShutdownDelay) {
+          shutdown_delay_val = value; got_shutdown = true; mapped_to = "shutdown_delay(FF86)";
+        } else if (usage == protocol::kUsageVendorRestoreDelay) {
+          restore_delay_val = value; got_restore = true; mapped_to = "restore_delay(FF86)";
+        }
+      }
+
+      if (raw_dump_sink() != nullptr && mapped_to != nullptr) {
+        char line[128];
+        std::snprintf(line, sizeof line, "elem [%s] id=%u pg=%04x ug=%04x val=%g -> %s",
+                      type_str, report_id, page, usage, value, mapped_to);
+        dump_raw_line(line);
       }
     }
     CFRelease(elements);
 
-    if (got_load) status.load_percent = load;
-    if (got_freq) status.frequency_hz = freq;
-    if (got_temp) status.temperature_c = temp;
-    if (got_input) status.input_voltage_v = input_v;
-    if (got_output) status.output_voltage_v = output_v;
-    if (got_battery_v) status.battery_voltage_v = battery_v;
-    if (got_runtime) status.runtime_seconds = runtime;
+    // Populate core fields
+    if (got_load)       status.load_percent   = load;
+    if (got_freq)       status.frequency_hz   = freq;
+    if (got_temp)       status.temperature_c  = temp;
+    if (got_input)      status.input_voltage_v  = input_v;
+    if (got_output)     status.output_voltage_v = output_v;
+    if (got_battery_v)  status.battery_voltage_v = battery_v;
+    if (got_runtime)    status.runtime_seconds = runtime;
     if (got_remain) {
       // RemainingCapacity is a percent on most of these UPSes. If the
       // device also exposes a larger full-charge capacity, convert.
@@ -201,6 +292,14 @@ class HidTransport : public Transport {
         status.battery_percent = remain;
       }
     }
+
+    // Populate extended fields
+    if (got_cycle)       status.cycle_count         = cycle_count_val;
+    if (got_need_repl)   status.need_replacement     = need_repl_val;
+    if (got_sensitivity) status.voltage_sensitivity  = static_cast<int>(sensitivity_val);
+    if (got_shutdown)    status.shutdown_delay_s     = shutdown_delay_val;
+    if (got_restore)     status.restore_delay_s      = restore_delay_val;
+
     if (!got_remain && !got_load && !got_input && !got_runtime) {
       status.ok = false;
       status.error = Error::RespNoAvailableItem;
@@ -218,17 +317,23 @@ class HidTransport : public Transport {
       }
       std::ostringstream summary;
       summary << "hid usages bat=";
-      if (got_remain) summary << remain; else summary << "n/a";
+      if (got_remain)     summary << remain;    else summary << "n/a";
       summary << " load=";
-      if (got_load) summary << load; else summary << "n/a";
+      if (got_load)       summary << load;      else summary << "n/a";
       summary << " in=";
-      if (got_input) summary << input_v; else summary << "n/a";
+      if (got_input)      summary << input_v;   else summary << "n/a";
       summary << " out=";
-      if (got_output) summary << output_v; else summary << "n/a";
+      if (got_output)     summary << output_v;  else summary << "n/a";
       summary << " runtime=";
-      if (got_runtime) summary << runtime; else summary << "n/a";
+      if (got_runtime)    summary << runtime;   else summary << "n/a";
       summary << " ac=";
       if (status.ac_present) summary << (*status.ac_present ? 1 : 0); else summary << "n/a";
+      summary << " sens=";
+      if (got_sensitivity) summary << static_cast<int>(sensitivity_val); else summary << "n/a";
+      summary << " shutd=";
+      if (got_shutdown)    summary << shutdown_delay_val; else summary << "n/a";
+      summary << " rest=";
+      if (got_restore)     summary << restore_delay_val;  else summary << "n/a";
       dump_raw_line(summary.str());
     }
     return status;
@@ -254,6 +359,42 @@ class HidTransport : public Transport {
 
   Error set_test_mode(int value) override {
     return write_control(test_element_, protocol::kUsageTest, value, fallback_test_report_id());
+  }
+
+  // Vendor 0xFF86 config writes.
+  // Prefer IOHIDDeviceSetValue via the element resolved from the descriptor.
+  // No hardcoded report-ID fallback: per PROTOCOL.md, 0xFF86 report IDs must
+  // come from the descriptor (IOHIDElementGetReportID); do not hardcode them.
+
+  Error set_voltage_sensitivity(int level) override {
+    // Write element: 0xFF86/0x72 (SetupVoltageSensitivity, High).
+    // Encoding: 1=High, 2=Medium, 3=Low (Medium confidence — see PROTOCOL.md).
+    IOHIDElementRef elem = find_control_element(device_, protocol::kPageVendorFf86,
+                                                protocol::kUsageVendorSensitivityWrite);
+    const Error rc = write_control(elem, protocol::kUsageVendorSensitivityWrite, level,
+                                   std::nullopt);
+    if (elem != nullptr) CFRelease(elem);
+    return rc;
+  }
+
+  Error set_shutdown_delay(int seconds) override {
+    // 0xFF86/0x16 (High). Report ID from descriptor; do not hardcode.
+    IOHIDElementRef elem = find_control_element(device_, protocol::kPageVendorFf86,
+                                                protocol::kUsageVendorShutdownDelay);
+    const Error rc = write_control(elem, protocol::kUsageVendorShutdownDelay, seconds,
+                                   std::nullopt);
+    if (elem != nullptr) CFRelease(elem);
+    return rc;
+  }
+
+  Error set_restore_delay(int seconds) override {
+    // 0xFF86/0x52 (High). Report ID from descriptor; do not hardcode.
+    IOHIDElementRef elem = find_control_element(device_, protocol::kPageVendorFf86,
+                                                protocol::kUsageVendorRestoreDelay);
+    const Error rc = write_control(elem, protocol::kUsageVendorRestoreDelay, seconds,
+                                   std::nullopt);
+    if (elem != nullptr) CFRelease(elem);
+    return rc;
   }
 
  private:
@@ -289,6 +430,8 @@ class HidTransport : public Transport {
 
     // Fallback: Feature report [report_id][value]. Report ID from the element
     // when present, else PID 0x0601 descriptor fallbacks (High for that PID).
+    // NOTE: vendor 0xFF86 usages pass fallback_report_id=nullopt so we do not
+    // hardcode their report IDs — element is required.
     uint8_t report_id = 0;
     if (element != nullptr) {
       report_id = static_cast<uint8_t>(IOHIDElementGetReportID(element));
@@ -340,13 +483,13 @@ class HidTransport : public Transport {
   }
 
   IOHIDManagerRef manager_;
-  IOHIDDeviceRef device_;
-  DeviceInfo info_;
+  IOHIDDeviceRef  device_;
+  DeviceInfo      info_;
   IOHIDElementRef alarm_element_ = nullptr;  // 0x84 / 0x5A
-  IOHIDElementRef test_element_ = nullptr;   // 0x84 / 0x58
-  uint8_t report_[1024] = {};
+  IOHIDElementRef test_element_  = nullptr;  // 0x84 / 0x58
+  uint8_t report_[1024]      = {};
   uint8_t last_report_[1024] = {};
-  CFIndex last_report_len_ = 0;
+  CFIndex last_report_len_   = 0;
 };
 
 IOHIDManagerRef make_manager(std::string& error) {
@@ -379,14 +522,14 @@ IOHIDManagerRef make_manager(std::string& error) {
 
 DeviceInfo info_from(IOHIDDeviceRef device) {
   DeviceInfo info;
-  info.transport = TransportKind::Hid;
-  info.vendor_id = static_cast<uint16_t>(cf_int(IOHIDDeviceGetProperty(device, CFSTR(kIOHIDVendorIDKey))));
+  info.transport  = TransportKind::Hid;
+  info.vendor_id  = static_cast<uint16_t>(cf_int(IOHIDDeviceGetProperty(device, CFSTR(kIOHIDVendorIDKey))));
   info.product_id = static_cast<uint16_t>(cf_int(IOHIDDeviceGetProperty(device, CFSTR(kIOHIDProductIDKey))));
   info.location_id = cf_int(IOHIDDeviceGetProperty(device, CFSTR(kIOHIDLocationIDKey)));
-  info.product = cf_string(IOHIDDeviceGetProperty(device, CFSTR(kIOHIDProductKey)));
+  info.product     = cf_string(IOHIDDeviceGetProperty(device, CFSTR(kIOHIDProductKey)));
   info.serial_number = cf_string(IOHIDDeviceGetProperty(device, CFSTR(kIOHIDSerialNumberKey)));
-  info.path = "hid:" + std::to_string(info.vendor_id) + ":" + std::to_string(info.product_id) + ":" +
-              std::to_string(info.location_id);
+  info.path = "hid:" + std::to_string(info.vendor_id) + ":" + std::to_string(info.product_id) +
+              ":" + std::to_string(info.location_id);
   return info;
 }
 

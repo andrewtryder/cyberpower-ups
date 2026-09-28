@@ -65,7 +65,13 @@ void usage(const char* argv0) {
             << "  --rating                     query rating (serial only)\n"
             << "  --cancel-schedule            cancel schedule (serial only)\n"
             << "  --indicator-test             LED test (serial only)\n"
-            << "  --buzzer-test                buzzer test (serial only)\n";
+            << "  --buzzer-test                buzzer test (serial only)\n"
+            << "\n"
+            << "  HID-only config writes:\n"
+            << "  --set-sensitivity N          set voltage sensitivity (1=High, 2=Medium, 3=Low)\n"
+            << "                               (Medium confidence on encoding; see PROTOCOL.md)\n"
+            << "  --set-shutdown-delay N       set shutdown delay in seconds (HID 0xFF86/0x16)\n"
+            << "  --set-restore-delay N        set restore/startup delay in seconds (HID 0xFF86/0x52)\n";
 }
 
 enum class DeviceAction {
@@ -81,7 +87,12 @@ enum class DeviceAction {
   Calibrate,
   IndicatorTest,
   BuzzerTest,
+  SetSensitivity,
+  SetShutdownDelay,
+  SetRestoreDelay,
 };
+
+int g_action_param = 0;  // numeric parameter for Set* actions
 
 const char* device_action_name(DeviceAction action) {
   switch (action) {
@@ -96,6 +107,9 @@ const char* device_action_name(DeviceAction action) {
     case DeviceAction::Calibrate: return "calibrate";
     case DeviceAction::IndicatorTest: return "indicator_test";
     case DeviceAction::BuzzerTest: return "buzzer_test";
+    case DeviceAction::SetSensitivity: return "set_sensitivity";
+    case DeviceAction::SetShutdownDelay: return "set_shutdown_delay";
+    case DeviceAction::SetRestoreDelay: return "set_restore_delay";
     case DeviceAction::None: return "none";
   }
   return "none";
@@ -126,6 +140,9 @@ int run_device_action(cyberpower::Ups& ups, DeviceAction action, bool json) {
     case DeviceAction::Calibrate: error = ups.calibrate(); break;
     case DeviceAction::IndicatorTest: error = ups.indicator_test(); break;
     case DeviceAction::BuzzerTest: error = ups.buzzer_test(); break;
+    case DeviceAction::SetSensitivity: error = ups.set_voltage_sensitivity(g_action_param); break;
+    case DeviceAction::SetShutdownDelay: error = ups.set_shutdown_delay(g_action_param); break;
+    case DeviceAction::SetRestoreDelay: error = ups.set_restore_delay(g_action_param); break;
     case DeviceAction::None: return 0;
   }
 
@@ -175,6 +192,7 @@ void print_status_text(const cyberpower::Status& status) {
     std::cout << "  raw: " << status.raw;
     if (status.raw.back() != '\n') std::cout << "\n";
   }
+  if (status.firmware_version) std::cout << "  firmware: " << *status.firmware_version << "\n";
   print_opt("battery", status.battery_percent, "%");
   print_opt("input", status.input_voltage_v, " V");
   print_opt("output", status.output_voltage_v, " V");
@@ -183,9 +201,18 @@ void print_status_text(const cyberpower::Status& status) {
   print_opt("frequency", status.frequency_hz, " Hz");
   print_opt("temperature", status.temperature_c, " C");
   print_opt("battery voltage", status.battery_voltage_v, " V");
-  if (status.ac_present) std::cout << "  ac present: " << (*status.ac_present ? "yes" : "no") << "\n";
-  if (status.charging) std::cout << "  charging: " << (*status.charging ? "yes" : "no") << "\n";
-  if (status.discharging) std::cout << "  discharging: " << (*status.discharging ? "yes" : "no") << "\n";
+  print_opt("cycle count", status.cycle_count, nullptr);
+  if (status.ac_present)       std::cout << "  ac present: "    << (*status.ac_present ? "yes" : "no") << "\n";
+  if (status.charging)         std::cout << "  charging: "      << (*status.charging ? "yes" : "no") << "\n";
+  if (status.discharging)      std::cout << "  discharging: "   << (*status.discharging ? "yes" : "no") << "\n";
+  if (status.need_replacement) std::cout << "  needs battery: " << (*status.need_replacement ? "yes" : "no") << "\n";
+  if (status.voltage_sensitivity) {
+    const int s = *status.voltage_sensitivity;
+    const char* label = (s == 1) ? "High" : (s == 2) ? "Medium" : (s == 3) ? "Low" : "?";
+    std::cout << "  sensitivity: " << s << " (" << label << ") [Medium confidence]\n";
+  }
+  print_opt("shutdown delay", status.shutdown_delay_s, " s");
+  print_opt("restore delay", status.restore_delay_s, " s");
 }
 
 void json_opt_number(std::ostream& out, const char* key, const std::optional<double>& value, bool& first) {
@@ -222,17 +249,40 @@ void print_status_json_object(std::ostream& out, const cyberpower::Status& statu
   out << ",\"error\":\"" << json_escape(cyberpower::error_name(status.error)) << '"';
   out << ",\"message\":\"" << json_escape(status.message) << '"';
   out << ",\"raw\":\"" << json_escape(status.raw) << '"';
-  json_opt_number(out, "battery_percent", status.battery_percent, first);
-  json_opt_number(out, "input_voltage_v", status.input_voltage_v, first);
-  json_opt_number(out, "output_voltage_v", status.output_voltage_v, first);
-  json_opt_number(out, "load_percent", status.load_percent, first);
-  json_opt_number(out, "runtime_seconds", status.runtime_seconds, first);
-  json_opt_number(out, "frequency_hz", status.frequency_hz, first);
-  json_opt_number(out, "temperature_c", status.temperature_c, first);
+  // Core fields
+  json_opt_number(out, "battery_percent",   status.battery_percent, first);
+  json_opt_number(out, "input_voltage_v",   status.input_voltage_v, first);
+  json_opt_number(out, "output_voltage_v",  status.output_voltage_v, first);
+  json_opt_number(out, "load_percent",      status.load_percent, first);
+  json_opt_number(out, "runtime_seconds",   status.runtime_seconds, first);
+  json_opt_number(out, "frequency_hz",      status.frequency_hz, first);
+  json_opt_number(out, "temperature_c",     status.temperature_c, first);
   json_opt_number(out, "battery_voltage_v", status.battery_voltage_v, first);
-  json_opt_bool(out, "ac_present", status.ac_present, first);
-  json_opt_bool(out, "charging", status.charging, first);
-  json_opt_bool(out, "discharging", status.discharging, first);
+  json_opt_bool(out, "ac_present",   status.ac_present, first);
+  json_opt_bool(out, "charging",     status.charging, first);
+  json_opt_bool(out, "discharging",  status.discharging, first);
+  // Extended HID fields
+  if (!first) out << ',';
+  first = false;
+  out << "\"firmware_version\":";
+  if (status.firmware_version) {
+    out << '"' << json_escape(*status.firmware_version) << '"';
+  } else {
+    out << "null";
+  }
+  json_opt_number(out, "cycle_count",     status.cycle_count, first);
+  json_opt_bool(out, "need_replacement",  status.need_replacement, first);
+  // voltage_sensitivity is int, not double — emit directly
+  if (!first) out << ',';
+  first = false;
+  out << "\"voltage_sensitivity\":";
+  if (status.voltage_sensitivity) {
+    out << *status.voltage_sensitivity;
+  } else {
+    out << "null";
+  }
+  json_opt_number(out, "shutdown_delay_s", status.shutdown_delay_s, first);
+  json_opt_number(out, "restore_delay_s",  status.restore_delay_s, first);
   out << '}';
 }
 
@@ -396,6 +446,30 @@ int main(int argc, char** argv) {
       if (!set_device_action(device_action, DeviceAction::IndicatorTest)) return 2;
     } else if (arg == "--buzzer-test") {
       if (!set_device_action(device_action, DeviceAction::BuzzerTest)) return 2;
+    } else if (arg == "--set-sensitivity") {
+      if (i + 1 >= argc) { usage(argv[0]); return 2; }
+      g_action_param = std::atoi(argv[++i]);
+      if (g_action_param < 1 || g_action_param > 3) {
+        std::cerr << "--set-sensitivity: value must be 1 (High), 2 (Medium), or 3 (Low)\n";
+        return 2;
+      }
+      if (!set_device_action(device_action, DeviceAction::SetSensitivity)) return 2;
+    } else if (arg == "--set-shutdown-delay") {
+      if (i + 1 >= argc) { usage(argv[0]); return 2; }
+      g_action_param = std::atoi(argv[++i]);
+      if (g_action_param < 0) {
+        std::cerr << "--set-shutdown-delay: value must be non-negative seconds\n";
+        return 2;
+      }
+      if (!set_device_action(device_action, DeviceAction::SetShutdownDelay)) return 2;
+    } else if (arg == "--set-restore-delay") {
+      if (i + 1 >= argc) { usage(argv[0]); return 2; }
+      g_action_param = std::atoi(argv[++i]);
+      if (g_action_param < 0) {
+        std::cerr << "--set-restore-delay: value must be non-negative seconds\n";
+        return 2;
+      }
+      if (!set_device_action(device_action, DeviceAction::SetRestoreDelay)) return 2;
     } else if (arg == "-h" || arg == "--help") {
       usage(argv[0]);
       return 0;

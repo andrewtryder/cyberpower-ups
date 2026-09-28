@@ -54,6 +54,23 @@ struct Status {
   std::optional<bool> charging;
   std::optional<bool> discharging;
 
+  // --- Extended HID-only fields ---
+  // Firmware version string from the device (HID 0x84/0xFE, High confidence).
+  // On CP1500PFCLCDa: the IOKit product string or HID iProduct usage.
+  // Empty when not available or not a HID device.
+  std::optional<std::string> firmware_version;
+
+  // Battery extras (HID Battery System page, High confidence on page/usage).
+  std::optional<double> cycle_count;       // 0x85/0x8C
+  std::optional<bool>   need_replacement;  // 0x85/0x29 (bit)
+
+  // Vendor 0xFF86 config values (HID only; NotSupported on serial).
+  // voltage_sensitivity: 1=High, 2=Medium, 3=Low (Medium confidence on
+  // value encoding — see PROTOCOL.md).
+  std::optional<int> voltage_sensitivity;  // 0xFF86/0x61
+  std::optional<double> shutdown_delay_s;  // 0xFF86/0x16, seconds
+  std::optional<double> restore_delay_s;   // 0xFF86/0x52, seconds
+
   // Every tag from a serial status frame, in driver stored units.
   protocol::StatusFrame frame;
 };
@@ -132,6 +149,21 @@ class Ups {
 
   // Buzzer test: "TB\r" (v2e). High. Serial only.
   Error buzzer_test();
+
+  // --- HID-only config writes (return NotSupported on serial) ---
+
+  // Set voltage sensitivity (input transfer threshold preset).
+  // HID: page 0xFF86 / usage 0x72 (High). Values: 1=High, 2=Medium, 3=Low
+  // (Medium confidence on encoding — inferred, not confirmed by disasm).
+  // Use protocol::kSensitivityHigh / kSensitivityMedium / kSensitivityLow.
+  Error set_voltage_sensitivity(int level);
+
+  // Set shutdown delay. HID: 0xFF86/0x16. Units: seconds. High.
+  // Writes only if the element is writable; returns NotSupported otherwise.
+  Error set_shutdown_delay(int seconds);
+
+  // Set restore/startup delay. HID: 0xFF86/0x52. Units: seconds. High.
+  Error set_restore_delay(int seconds);
 
   // Serial only. `command` may already end in CR; otherwise CR is appended
   // (v2e delimiter is 0x0D). HID devices return Error::NotSupported.

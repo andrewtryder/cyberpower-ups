@@ -28,6 +28,14 @@ class Transport {
   virtual Error set_alarm_control(int /*value*/) { return Error::NotSupported; }
   virtual Error get_alarm_control(int& /*value*/) { return Error::NotSupported; }
   virtual Error set_test_mode(int /*value*/) { return Error::NotSupported; }
+
+  // HID-only vendor 0xFF86 config writes. Returns NotSupported on serial.
+  // level: 1=High sensitivity, 2=Medium, 3=Low (Medium confidence encoding).
+  virtual Error set_voltage_sensitivity(int /*level*/) { return Error::NotSupported; }
+  // seconds: shutdown delay in seconds (High).
+  virtual Error set_shutdown_delay(int /*seconds*/) { return Error::NotSupported; }
+  // seconds: restore/startup delay in seconds (High).
+  virtual Error set_restore_delay(int /*seconds*/) { return Error::NotSupported; }
 };
 
 std::vector<DeviceInfo> list_hid();

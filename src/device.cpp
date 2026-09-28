@@ -46,6 +46,13 @@ bool status_changed(const Status& previous, const Status& current) {
   if (!same_opt_bool(previous.ac_present, current.ac_present)) return true;
   if (!same_opt_bool(previous.charging, current.charging)) return true;
   if (!same_opt_bool(previous.discharging, current.discharging)) return true;
+  // Extended fields
+  if (previous.firmware_version != current.firmware_version) return true;
+  if (!near_eq(previous.cycle_count, current.cycle_count)) return true;
+  if (!same_opt_bool(previous.need_replacement, current.need_replacement)) return true;
+  if (previous.voltage_sensitivity != current.voltage_sensitivity) return true;
+  if (!near_eq(previous.shutdown_delay_s, current.shutdown_delay_s)) return true;
+  if (!near_eq(previous.restore_delay_s, current.restore_delay_s)) return true;
   return false;
 }
 
@@ -145,6 +152,18 @@ Error Ups::calibrate() {
 Error Ups::indicator_test() { return send_command(protocol::cmd::kIndicatorTest); }
 
 Error Ups::buzzer_test() { return send_command(protocol::cmd::kBuzzerTest); }
+
+Error Ups::set_voltage_sensitivity(int level) {
+  return impl_->transport->set_voltage_sensitivity(level);
+}
+
+Error Ups::set_shutdown_delay(int seconds) {
+  return impl_->transport->set_shutdown_delay(seconds);
+}
+
+Error Ups::set_restore_delay(int seconds) {
+  return impl_->transport->set_restore_delay(seconds);
+}
 
 Error Ups::transact(const std::string& command, std::string& response) {
   return impl_->transport->transact(command, response);

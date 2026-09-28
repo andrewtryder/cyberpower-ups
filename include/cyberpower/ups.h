@@ -53,6 +53,17 @@ typedef struct cp_status {
   int charging;
   int has_discharging;
   int discharging;
+  char* firmware_version; /* dynamically allocated, freed in cp_ups_status_free */
+  int has_cycle_count;
+  double cycle_count;
+  int has_need_replacement;
+  int need_replacement;
+  int has_voltage_sensitivity;
+  int voltage_sensitivity;
+  int has_shutdown_delay_s;
+  double shutdown_delay_s;
+  int has_restore_delay_s;
+  double restore_delay_s;
 } cp_status;
 
 typedef struct cp_ups cp_ups;
@@ -83,6 +94,11 @@ int cp_ups_cancel_schedule(cp_ups* ups);
 int cp_ups_calibrate(cp_ups* ups);
 int cp_ups_indicator_test(cp_ups* ups);
 int cp_ups_buzzer_test(cp_ups* ups);
+
+/* HID-only config writes. */
+int cp_ups_set_voltage_sensitivity(cp_ups* ups, int level);
+int cp_ups_set_shutdown_delay(cp_ups* ups, int seconds);
+int cp_ups_set_restore_delay(cp_ups* ups, int seconds);
 
 /* Serial transact. response is malloc'd. Returns the Error numeric value. */
 int cp_ups_transact(cp_ups* ups, const char* command, char** response);

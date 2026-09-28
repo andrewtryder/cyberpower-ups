@@ -152,20 +152,70 @@ USB vendor id **0x0764** (High). The enumerator builds matching dictionaries for
 
 Usages used for the status snapshot (page/usage High; English names from the USB HID Usage Tables, Medium):
 
-| Page | Usage | Name |
-| --- | --- | --- |
-| `0x84` | `0x30` | Voltage (parent `0x1A` input, `0x1C` output, `0x12` battery) |
-| `0x84` | `0x32` | Frequency |
-| `0x84` | `0x35` | PercentLoad |
-| `0x84` | `0x36` | Temperature |
-| `0x85` | `0x66` | RemainingCapacity |
-| `0x85` | `0x67` | FullChargeCapacity |
-| `0x85` | `0x68` | RunTimeToEmpty |
-| `0x85` / `0xFF01` | `0xD0` | AC present |
-| `0x85` | `0x44`, `0xD1` | Charging |
-| `0x85` | `0x45`, `0xD2` | Discharging |
+> [!IMPORTANT]
+> The numbers below are HID **usage IDs** — they are **not** HID report IDs. Report IDs are assigned by the report descriptor and must be read at runtime via `IOHIDElementGetReportID`. Do not hardcode report IDs for any page other than PID 0x0601 (where the descriptor values are confirmed).
 
-Vendor page `0xFF86` is mapped heavily (usages `0x72`, `0x42`, `0x16`, …). Those values are not decoded here; the semantic is Low.
+### Power Device page (0x84)
+
+| Page | Usage | Name | Confidence |
+| --- | --- | --- | --- |
+| `0x84` | `0x30` | Voltage (parent collection: `0x1A` input, `0x1C` output, `0x12` battery) | High |
+| `0x84` | `0x32` | Frequency | High |
+| `0x84` | `0x35` | PercentLoad (older firmware alias) | High |
+| `0x84` | `0x65` | PercentLoad (**RE-confirmed** from `UsageMapping::Initialize`) | High |
+| `0x84` | `0x36` | Temperature (older firmware; superseded by `0x85/0x67`) | High |
+| `0x84` | `0xFD` | ACPresent (**RE-confirmed** in `Initialize @ 0x972A1`) | High |
+| `0x84` | `0xFE` | FirmwareVersion / iProduct string | High |
+
+### Battery System page (0x85) — RE-confirmed primary usages
+
+| Page | Usage | Name | Confidence |
+| --- | --- | --- | --- |
+| `0x85` | `0x2C` | RemainingCapacity (**RE-confirmed**; preferred over `0x66`) | High |
+| `0x85` | `0x8B` | RunTimeToEmpty (**RE-confirmed**; preferred over `0x68`) | High |
+| `0x85` | `0x8C` | CycleCount | High |
+| `0x85` | `0x8D` | FullChargeCapacity | High |
+| `0x85` | `0x8E` | DesignCapacity | High |
+| `0x85` | `0x67` | Temperature (Battery System; overwrites `0x84/0x36`) | High |
+| `0x85` | `0x29` | NeedReplacement (bit) | High |
+| `0x85` | `0x68` | Charging (**RE-confirmed**) | High |
+| `0x85` | `0x66` | Discharging (**RE-confirmed**) | High |
+
+### Battery System page (0x85) — older / alternative usages (kept for firmware compat)
+
+| Page | Usage | Name | Confidence |
+| --- | --- | --- | --- |
+| `0x85` | `0x66` | RemainingCapacity (older firmware; preferred only if `> 1`) | Medium |
+| `0x85` | `0x67` | FullChargeCapacity (older firmware alternate slot) | Medium |
+| `0x85` | `0x68` | RunTimeToEmpty (older firmware alternate slot) | Medium |
+| `0x85` | `0x44`, `0xD1` | Charging (alternate / `0xFF01`) | Medium |
+| `0x85` | `0x45`, `0xD2` | Discharging (alternate / `0xFF01`) | Medium |
+| `0x85` / `0xFF01` | `0xD0` | ACPresent (alternate) | Medium |
+
+### Vendor page 0xFF86 — configuration usages (High page/usage)
+
+This page is mapped heavily in `UsageMapping::Initialize`. The semantic names are derived from `HidUps::Sleep`, `SetupVoltageSensitivity`, and the surrounding data flows (Medium English names).
+
+**Report IDs for 0xFF86 usages must be read from the device descriptor at runtime.** The library uses `find_control_element` → `IOHIDElementGetReportID` and does not fall back to hardcoded IDs for this page.
+
+| Page | Usage | Access | Name | Units | Confidence |
+| --- | --- | --- | --- | --- | --- |
+| `0xFF86` | `0x61` | Read | VoltageSensitivity | 1/2/3 | High usage; Medium encoding |
+| `0xFF86` | `0x72` | Write | SetVoltageSensitivity | 1/2/3 | High usage; Medium encoding |
+| `0xFF86` | `0x16` | Read/Write | ShutdownDelay | seconds | High |
+| `0xFF86` | `0x52` | Read/Write | RestoreDelay | seconds | High |
+
+Sensitivity value encoding (Medium — inferred from 3-value alarm pattern):
+
+| Value | Meaning |
+| --- | --- |
+| `1` | High sensitivity (tighter input transfer window) |
+| `2` | Medium |
+| `3` | Low sensitivity |
+
+### Firmware version
+
+`HID 0x84/0xFE` is intended to map to the firmware string on some models. However, on CP1500PFCLCDa, it surfaces as a standard USB string index that resolves to the USB iProduct string descriptor, which is simply the product name (e.g. `CP1500PFCLCDa`) and not the true firmware version (`CR01802CBH11`). Therefore, this library avoids blindly copying the product name into the firmware version field unless it matches a true firmware version pattern.
 
 ### HID controls (alarm / test)
 

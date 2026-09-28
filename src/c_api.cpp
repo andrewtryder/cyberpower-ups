@@ -53,6 +53,20 @@ void fill_status(cp_status* out, const cyberpower::Status& status) {
     out->has_discharging = 1;
     out->discharging = *status.discharging ? 1 : 0;
   }
+  if (status.firmware_version) {
+    out->firmware_version = dup_cstr(*status.firmware_version);
+  }
+  set_opt(out->has_cycle_count, out->cycle_count, status.cycle_count);
+  if (status.need_replacement) {
+    out->has_need_replacement = 1;
+    out->need_replacement = *status.need_replacement ? 1 : 0;
+  }
+  if (status.voltage_sensitivity) {
+    out->has_voltage_sensitivity = 1;
+    out->voltage_sensitivity = *status.voltage_sensitivity;
+  }
+  set_opt(out->has_shutdown_delay_s, out->shutdown_delay_s, status.shutdown_delay_s);
+  set_opt(out->has_restore_delay_s, out->restore_delay_s, status.restore_delay_s);
 }
 
 struct Session {
@@ -130,8 +144,10 @@ void cp_ups_status_free(cp_status* status) {
   if (status == nullptr) return;
   std::free(status->message);
   std::free(status->raw);
+  std::free(status->firmware_version);
   status->message = nullptr;
   status->raw = nullptr;
+  status->firmware_version = nullptr;
 }
 
 int cp_ups_self_test(cp_ups* ups) {
@@ -190,6 +206,21 @@ int cp_ups_indicator_test(cp_ups* ups) {
 int cp_ups_buzzer_test(cp_ups* ups) {
   if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
   return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.buzzer_test());
+}
+
+int cp_ups_set_voltage_sensitivity(cp_ups* ups, int level) {
+  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
+  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.set_voltage_sensitivity(level));
+}
+
+int cp_ups_set_shutdown_delay(cp_ups* ups, int seconds) {
+  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
+  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.set_shutdown_delay(seconds));
+}
+
+int cp_ups_set_restore_delay(cp_ups* ups, int seconds) {
+  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
+  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.set_restore_delay(seconds));
 }
 
 int cp_ups_transact(cp_ups* ups, const char* command, char** response) {

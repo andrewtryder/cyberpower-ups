@@ -82,7 +82,8 @@ bool maybe_load_json_fixture(const std::string& path) {
   std::ostringstream buffer;
   buffer << in.rdbuf();
   const std::string text = buffer.str();
-  if (text.find("\"devices\"") == std::string::npos && text.find("\"status\"") == std::string::npos &&
+  if (text.find("\"devices\"") == std::string::npos &&
+      text.find("\"status\"") == std::string::npos &&
       text.find("battery_percent") == std::string::npos) {
     return fail("fixture " + path + " does not look like cpups --json output");
   }
@@ -99,7 +100,57 @@ bool maybe_load_json_fixture(const std::string& path) {
       return fail("fixture load_percent out of range: " + std::to_string(load));
     }
   }
+  // Extended fields: validate range when present.
+  double cycle = 0;
+  if (extract_json_number(text, "cycle_count", cycle)) {
+    if (cycle < 0.0 || cycle > 10000.0) {
+      return fail("fixture cycle_count out of range: " + std::to_string(cycle));
+    }
+  }
+  double sens = 0;
+  if (extract_json_number(text, "voltage_sensitivity", sens)) {
+    if (sens < 1.0 || sens > 3.0) {
+      return fail("fixture voltage_sensitivity out of range: " + std::to_string(sens));
+    }
+  }
+  double shutd = 0;
+  if (extract_json_number(text, "shutdown_delay_s", shutd)) {
+    if (shutd < 0.0) {
+      return fail("fixture shutdown_delay_s negative: " + std::to_string(shutd));
+    }
+  }
+  double rest = 0;
+  if (extract_json_number(text, "restore_delay_s", rest)) {
+    if (rest < 0.0) {
+      return fail("fixture restore_delay_s negative: " + std::to_string(rest));
+    }
+  }
   std::cout << "offline_test: loaded fixture " << path << "\n";
+  return true;
+}
+
+bool test_protocol_constants() {
+  using namespace cyberpower::protocol;
+  // Vendor 0xFF86 sensitivity usages (High confidence).
+  if (kUsageVendorSensitivityRead  != 0x0061) return fail("kUsageVendorSensitivityRead");
+  if (kUsageVendorSensitivityWrite != 0x0072) return fail("kUsageVendorSensitivityWrite");
+  if (kUsageVendorShutdownDelay    != 0x0016) return fail("kUsageVendorShutdownDelay");
+  if (kUsageVendorRestoreDelay     != 0x0052) return fail("kUsageVendorRestoreDelay");
+  // Sensitivity encoding values (Medium confidence; check symbolic names).
+  if (kSensitivityHigh   != 1) return fail("kSensitivityHigh");
+  if (kSensitivityMedium != 2) return fail("kSensitivityMedium");
+  if (kSensitivityLow    != 3) return fail("kSensitivityLow");
+  // RE-confirmed Battery System usages.
+  if (kUsageRemainingCapacity  != 0x002C) return fail("kUsageRemainingCapacity");
+  if (kUsageRunTimeToEmpty     != 0x008B) return fail("kUsageRunTimeToEmpty");
+  if (kUsageCycleCount         != 0x008C) return fail("kUsageCycleCount");
+  if (kUsageNeedReplacement    != 0x0029) return fail("kUsageNeedReplacement");
+  if (kUsageCharging           != 0x0068) return fail("kUsageCharging");
+  if (kUsageDischarging        != 0x0066) return fail("kUsageDischarging");
+  // RE-confirmed Power Device usages.
+  if (kUsagePercentLoad   != 0x0065) return fail("kUsagePercentLoad");
+  if (kUsageACPresent     != 0x00FD) return fail("kUsageACPresent");
+  if (kUsageFirmwareVer   != 0x00FE) return fail("kUsageFirmwareVer");
   return true;
 }
 
@@ -123,6 +174,9 @@ int main() {
 
   if (!test_hardcoded_frames()) return 1;
   std::cout << "offline_test: hardcoded v2e frames ok\n";
+
+  if (!test_protocol_constants()) return 1;
+  std::cout << "offline_test: protocol constants ok\n";
 
   // Always try the synthetic example shipped in-tree.
   if (!maybe_load_json_fixture(fixture_path("synthetic_status.json"))) return 1;
