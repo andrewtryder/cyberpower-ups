@@ -144,4 +144,9 @@ std::vector<DeviceInfo> list_devices();
 
 std::optional<Ups> open_device(const DeviceInfo& info, std::string* error = nullptr);
 
+// When non-null, platform transports write capture lines (serial TX/RX,
+// HID input-report hex) to this stream. Not thread-safe; for CLI capture.
+// Pass nullptr to disable. Lines are independent of --json stdout.
+void set_raw_dump_sink(std::ostream* out);
+
 }  // namespace cyberpower

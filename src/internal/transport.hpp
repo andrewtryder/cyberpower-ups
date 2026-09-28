@@ -4,11 +4,17 @@
 
 #include "cyberpower/ups.hpp"
 
+#include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace cyberpower::platform {
+
+// Optional sink for transport-level capture (serial TX/RX, HID input reports).
+// Not thread-safe; intended for CLI --dump-raw. nullptr disables dumping.
+std::ostream*& raw_dump_sink();
+void dump_raw_line(const std::string& line);
 
 class Transport {
  public:

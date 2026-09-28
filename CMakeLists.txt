@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(cyberpower-ups
-  VERSION 0.2.0
+  VERSION 0.3.0
   DESCRIPTION "C++17 library and CLI for CyberPower UPS devices over USB HID and serial"
   LANGUAGES CXX
 )
@@ -18,6 +18,7 @@ add_library(cyberpower-ups
   src/driver.cpp
   src/device.cpp
   src/c_api.cpp
+  src/raw_dump.cpp
 )
 
 add_library(cyberpower-ups::cyberpower-ups ALIAS cyberpower-ups)
@@ -60,6 +61,20 @@ target_link_libraries(cpups PRIVATE cyberpower-ups)
 
 add_executable(list_and_status examples/list_and_status.cpp)
 target_link_libraries(list_and_status PRIVATE cyberpower-ups)
+
+# ---------------------------------------------------------------------------
+# Offline tests (no UPS required)
+# ---------------------------------------------------------------------------
+
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(offline_test tests/offline_test.cpp)
+  target_link_libraries(offline_test PRIVATE cyberpower-ups)
+  add_test(NAME offline_test COMMAND offline_test)
+  set_tests_properties(offline_test PROPERTIES
+    ENVIRONMENT "CPUPS_FIXTURES_DIR=${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+  )
+endif()
 
 # ---------------------------------------------------------------------------
 # Install / package config

@@ -21,6 +21,9 @@ jobs:
       - name: Protocol self-test
         run: ./build/cpups --self-test
 
+      - name: CTest offline
+        run: ctest --test-dir build --output-on-failure
+
       - name: Install (prefix)
         run: |
           cmake --install build --prefix "$PWD/install-prefix"
@@ -46,3 +49,6 @@ jobs:
 
       - name: Protocol self-test
         run: ./build/cpups --self-test
+
+      - name: CTest offline
+        run: ctest --test-dir build --output-on-failure

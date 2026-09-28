@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <stdio.h>
 #include <string.h>
 #include <termios.h>
 #include <unistd.h>
@@ -81,6 +82,7 @@ class SerialTransport : public Transport {
   Error transact(const std::string& command, std::string& response) override {
     std::string wire = command;
     if (wire.empty() || wire.back() != protocol::kFrameDelimiter) wire.push_back(protocol::kFrameDelimiter);
+    dump_raw_line(std::string("serial tx ") + escape_for_dump(wire));
     const ssize_t wrote = ::write(fd_, wire.data(), wire.size());
     if (wrote < 0 || static_cast<std::size_t>(wrote) != wire.size()) return Error::Io;
 
@@ -109,13 +111,36 @@ class SerialTransport : public Transport {
       if (response.find(protocol::kFrameDelimiter) != std::string::npos) {
         const auto cut = response.find(protocol::kFrameDelimiter);
         response.resize(cut + 1);
+        dump_raw_line(std::string("serial rx ") + escape_for_dump(response));
         return Error::Ok;
       }
+    }
+    if (!response.empty()) {
+      dump_raw_line(std::string("serial rx (incomplete) ") + escape_for_dump(response));
     }
     return response.empty() ? Error::RespEmpty : Error::Timeout;
   }
 
  private:
+  static std::string escape_for_dump(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    for (unsigned char c : text) {
+      if (c == '\r') {
+        out += "\\r";
+      } else if (c == '\n') {
+        out += "\\n";
+      } else if (c >= 0x20 && c < 0x7f) {
+        out.push_back(static_cast<char>(c));
+      } else {
+        char buf[8];
+        std::snprintf(buf, sizeof buf, "\\x%02x", c);
+        out += buf;
+      }
+    }
+    return out;
+  }
+
   static void apply_field(Status& status, char tag, std::optional<double>& dest) {
     const auto it = status.frame.fields.find(tag);
     if (it == status.frame.fields.end()) return;

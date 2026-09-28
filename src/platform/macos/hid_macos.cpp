@@ -6,6 +6,9 @@
 #include <IOKit/hid/IOHIDManager.h>
 
 #include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -175,18 +178,71 @@ class HidTransport : public Transport {
       status.error = Error::RespNoAvailableItem;
       status.message = "HID device exposed none of the recovered status usages";
     }
+
+    if (raw_dump_sink() != nullptr) {
+      // Give the input-report callback another chance to fill the cache.
+      CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
+      if (last_report_len_ > 0) {
+        status.raw = hex_bytes(last_report_, last_report_len_);
+        dump_raw_line("hid report " + status.raw);
+      } else {
+        dump_raw_line("hid read_status (no input report cached)");
+      }
+      std::ostringstream summary;
+      summary << "hid usages bat=";
+      if (got_remain) summary << remain; else summary << "n/a";
+      summary << " load=";
+      if (got_load) summary << load; else summary << "n/a";
+      summary << " in=";
+      if (got_input) summary << input_v; else summary << "n/a";
+      summary << " out=";
+      if (got_output) summary << output_v; else summary << "n/a";
+      summary << " runtime=";
+      if (got_runtime) summary << runtime; else summary << "n/a";
+      summary << " ac=";
+      if (status.ac_present) summary << (*status.ac_present ? 1 : 0); else summary << "n/a";
+      dump_raw_line(summary.str());
+    }
     return status;
   }
 
   Error transact(const std::string&, std::string&) override { return Error::NotSupported; }
 
  private:
-  static void on_report(void*, IOReturn, void*, IOHIDReportType, uint32_t, uint8_t*, CFIndex) {}
+  static std::string hex_bytes(const uint8_t* data, CFIndex len) {
+    std::string out;
+    out.reserve(static_cast<std::size_t>(len) * 3);
+    for (CFIndex i = 0; i < len; ++i) {
+      if (i != 0) out.push_back(' ');
+      char buf[8];
+      std::snprintf(buf, sizeof buf, "%02x", data[i]);
+      out += buf;
+    }
+    return out;
+  }
+
+  static void on_report(void* context, IOReturn, void*, IOHIDReportType type, uint32_t report_id,
+                        uint8_t* report, CFIndex len) {
+    auto* self = static_cast<HidTransport*>(context);
+    if (self == nullptr || report == nullptr || len <= 0) return;
+    const CFIndex copy_len = len < static_cast<CFIndex>(sizeof self->last_report_)
+                                 ? len
+                                 : static_cast<CFIndex>(sizeof self->last_report_);
+    std::memcpy(self->last_report_, report, static_cast<std::size_t>(copy_len));
+    self->last_report_len_ = copy_len;
+    if (raw_dump_sink() == nullptr) return;
+    char header[64];
+    std::snprintf(header, sizeof header, "hid report type=%u id=%u len=%ld ",
+                  static_cast<unsigned>(type), report_id, static_cast<long>(len));
+    dump_raw_line(std::string(header) + hex_bytes(report, len));
+  }
 
   IOHIDManagerRef manager_;
   IOHIDDeviceRef device_;
   DeviceInfo info_;
   uint8_t report_[1024] = {};
+  uint8_t last_report_[1024] = {};
+  CFIndex last_report_len_ = 0;
 };
 
 IOHIDManagerRef make_manager(std::string& error) {

@@ -14,3 +14,9 @@ CMakeFiles/
 .vscode/
 compile_commands.json
 .cache/
+
+# Local real-device captures (may contain serial numbers)
+fixtures/cp*.json
+fixtures/cp*.txt
+fixtures/*_raw.txt
+!fixtures/synthetic_status.json

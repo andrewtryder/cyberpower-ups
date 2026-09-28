@@ -56,6 +56,10 @@ cmake --build build
 ./build/cpups --indicator-test
 ./build/cpups --buzzer-test
 ./build/cpups --rating --json
+
+# Capture raw HID reports / serial lines to stderr
+./build/cpups --dump-raw
+./build/cpups --json --dump-raw 2> fixtures/raw.txt
 ```
 
 `cpups` is the day-to-day CLI. `examples/list_and_status` is a thinner library sample if you want a starting point for your own code.
@@ -170,11 +174,36 @@ cyberpower-ups/
 │   ├── platform/macos/   # IOKit + termios
 │   └── platform/windows/ # Stub / extension points for SetupAPI + COM
 ├── tools/cpups.cpp       # Command-line tool
+├── tests/                # Offline CTest (no UPS required)
+├── fixtures/             # Capture instructions + optional dumps
 ├── examples/             # Library samples
 ├── cmake/                # Package config + pkg-config templates
 ├── PROTOCOL.md           # Protocol notes & reverse-engineering detail
 └── CMakeLists.txt
 ```
+
+---
+
+## Testing / Fixtures
+
+Offline tests need no UPS. They run the protocol self-test, parse hard-coded v2e status frames, and load JSON fixtures when present:
+
+```bash
+cmake -S . -B build
+cmake --build build
+ctest --test-dir build --output-on-failure
+# or: ./build/cpups --self-test
+```
+
+Capture real-device fixtures (optional; see [fixtures/README.md](fixtures/README.md)):
+
+```bash
+./build/cpups --json > fixtures/cp1500pfclcda_status.json
+./build/cpups --rating > fixtures/cp1500pfclcda_rating.txt
+./build/cpups --dump-raw 2> fixtures/cp1500pfclcda_raw.txt
+```
+
+`--dump-raw` writes serial TX/RX lines or HID input-report hex to **stderr** so stdout can stay JSON-clean.
 
 ---
 

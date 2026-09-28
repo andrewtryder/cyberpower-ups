@@ -54,6 +54,7 @@ void usage(const char* argv0) {
             << "  --monitor            poll the first UPS and print live status\n"
             << "  --interval MS        monitor poll interval in milliseconds (default: 2000)\n"
             << "  --every-poll         with --monitor, print every sample (default: on change)\n"
+            << "  --dump-raw           print serial TX/RX or HID report hex to stderr while reading\n"
             << "\n"
             << "  Device commands (first UPS; serial protocols; HID returns NotSupported):\n"
             << "  --test, --self-test-device   quick battery / self-test\n"
@@ -337,6 +338,7 @@ int main(int argc, char** argv) {
   bool json = false;
   bool monitor = false;
   bool every_poll = false;
+  bool dump_raw = false;
   int interval_ms = 2000;
   DeviceAction device_action = DeviceAction::None;
 
@@ -350,6 +352,8 @@ int main(int argc, char** argv) {
       monitor = true;
     } else if (arg == "--every-poll") {
       every_poll = true;
+    } else if (arg == "--dump-raw") {
+      dump_raw = true;
     } else if (arg == "--interval") {
       if (i + 1 >= argc) {
         usage(argv[0]);
@@ -402,6 +406,10 @@ int main(int argc, char** argv) {
       std::cout << "protocol self-test passed\n";
     }
     return 0;
+  }
+
+  if (dump_raw) {
+    cyberpower::set_raw_dump_sink(&std::cerr);
   }
 
   const std::vector<cyberpower::DeviceInfo> devices = cyberpower::list_devices();
