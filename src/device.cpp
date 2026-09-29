@@ -1,6 +1,7 @@
 #include "cyberpower/ups.hpp"
 
 #include "internal/transport.hpp"
+#include "internal/device_helpers.hpp"
 
 #include <cmath>
 #include <thread>
@@ -122,18 +123,25 @@ Error Ups::mute_alarm() {
   return impl_->transport->set_alarm_control(protocol::kAlarmMute);
 }
 
-Error Ups::toggle_buzzer() {
+Error internal::toggle_buzzer(platform::Transport& transport) {
   // HID best-effort toggle: mute when currently enabled (2), otherwise enable.
   // Serial: "B\r" (v1 ToggleBuzzerRequester). High for serial; Medium HID policy.
   int current = 0;
-  if (impl_->transport->get_alarm_control(current) == Error::Ok) {
+  const Error read = transport.get_alarm_control(current);
+  if (read == Error::Ok) {
     const int next =
         (current == protocol::kAlarmEnable) ? protocol::kAlarmMute : protocol::kAlarmEnable;
-    return impl_->transport->set_alarm_control(next);
+    return transport.set_alarm_control(next);
   }
-  const Error hid = impl_->transport->set_alarm_control(protocol::kAlarmMute);
-  if (hid != Error::NotSupported) return hid;
-  return send_command(protocol::cmd::kToggleBuzzer);
+  // A failed HID read does not establish the current state, so never turn it
+  // into a state-changing write. Only an unavailable HID read may use serial.
+  if (read != Error::NotSupported) return read;
+  std::string unused;
+  return transport.transact(protocol::cmd::kToggleBuzzer, unused);
+}
+
+Error Ups::toggle_buzzer() {
+  return internal::toggle_buzzer(*impl_->transport);
 }
 
 Error Ups::read_rating(std::string& response) {
@@ -154,14 +162,18 @@ Error Ups::indicator_test() { return send_command(protocol::cmd::kIndicatorTest)
 Error Ups::buzzer_test() { return send_command(protocol::cmd::kBuzzerTest); }
 
 Error Ups::set_voltage_sensitivity(int level) {
+  if (level != protocol::kSensitivityHigh && level != protocol::kSensitivityMedium &&
+      level != protocol::kSensitivityLow) return Error::ReqParamOutOfRange;
   return impl_->transport->set_voltage_sensitivity(level);
 }
 
 Error Ups::set_shutdown_delay(int seconds) {
+  if (seconds < 0) return Error::ReqParamOutOfRange;
   return impl_->transport->set_shutdown_delay(seconds);
 }
 
 Error Ups::set_restore_delay(int seconds) {
+  if (seconds < 0) return Error::ReqParamOutOfRange;
   return impl_->transport->set_restore_delay(seconds);
 }
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <signal.h>
+
 // Pure C facade over the C++ API. Strings returned by cp_ups_list are
 // owned by the library until cp_ups_list_free. Status strings are owned
 // by the caller after cp_ups_status_free.
@@ -105,15 +107,33 @@ int cp_ups_transact(cp_ups* ups, const char* command, char** response);
 
 /* Blocking status monitor on the calling thread (no background worker).
    Invokes callback for the first sample and then according to only_on_change.
-   stop_flag is polled each iteration; set it non-zero (e.g. from SIGINT) to
-   return. The cp_status pointer is valid only during the callback. */
+   This legacy variant is only for a signal handler: stop_flag must be a
+   volatile sig_atomic_t set non-zero by that handler. It is not safe for
+   communication with another thread. The cp_status pointer is valid only
+   during the callback. */
 typedef void (*cp_ups_monitor_cb)(const cp_status* status, int changed, void* user_data);
 void cp_ups_monitor(cp_ups* ups,
                     int interval_ms,
                     int only_on_change,
-                    volatile int* stop_flag,
+                    volatile sig_atomic_t* stop_flag,
                     cp_ups_monitor_cb callback,
                     void* user_data);
+
+/* Thread-safe monitor stop token. Create and request may be called from
+   ordinary threads. Do not destroy the token until every
+   cp_ups_monitor_with_stop_token call using it has returned. Request is not
+   async-signal-safe; use cp_ups_monitor's sig_atomic_t variant when stopping
+   from a signal handler. */
+typedef struct cp_ups_stop_token cp_ups_stop_token;
+cp_ups_stop_token* cp_ups_stop_token_create(void);
+void cp_ups_stop_token_request(cp_ups_stop_token* token);
+void cp_ups_stop_token_destroy(cp_ups_stop_token* token);
+void cp_ups_monitor_with_stop_token(cp_ups* ups,
+                                    int interval_ms,
+                                    int only_on_change,
+                                    const cp_ups_stop_token* stop_token,
+                                    cp_ups_monitor_cb callback,
+                                    void* user_data);
 
 #ifdef __cplusplus
 }

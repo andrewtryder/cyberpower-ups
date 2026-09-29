@@ -1,4 +1,6 @@
 #include "internal/transport.hpp"
+#include "internal/serial_discovery.hpp"
+#include "internal/serial_write.hpp"
 
 #include "cyberpower/protocol.hpp"
 
@@ -12,22 +14,11 @@
 #include <unistd.h>
 
 #include <string>
+#include <cstdlib>
 #include <vector>
 
 namespace cyberpower::platform {
 namespace {
-
-// Port-name fragments present in the driver. High.
-bool driver_port_name(const std::string& name) {
-  return name.find("cu.wchusbserial") != std::string::npos || name.find("ttyUSB") != std::string::npos ||
-         name.find("ttyS") != std::string::npos;
-}
-
-// Common macOS USB-serial names the driver does not spell out. Low.
-bool extra_port_name(const std::string& name) {
-  return name.find("cu.usbserial") != std::string::npos || name.find("cu.usbmodem") != std::string::npos ||
-         name.find("cu.SLAB") != std::string::npos;
-}
 
 speed_t darwin_speed(int baud) {
   switch (baud) {
@@ -83,8 +74,8 @@ class SerialTransport : public Transport {
     std::string wire = command;
     if (wire.empty() || wire.back() != protocol::kFrameDelimiter) wire.push_back(protocol::kFrameDelimiter);
     dump_raw_line(std::string("serial tx ") + escape_for_dump(wire));
-    const ssize_t wrote = ::write(fd_, wire.data(), wire.size());
-    if (wrote < 0 || static_cast<std::size_t>(wrote) != wire.size()) return Error::Io;
+    const Error write_error = write_all_nonblocking(fd_, wire.data(), wire.size(), 1500);
+    if (write_error != Error::Ok) return write_error;
 
     response.clear();
     const int timeout_ms = 1500;
@@ -159,9 +150,13 @@ std::vector<DeviceInfo> list_serial() {
   std::vector<DeviceInfo> found;
   DIR* dir = ::opendir("/dev");
   if (dir == nullptr) return found;
+  // Generic USB serial nodes cannot be tied to CyberPower by their filename.
+  // They are opt-in, so ordinary `cpups` never sends D\\r to unrelated gear.
+  const char* generic_setting = std::getenv("CPUPS_INCLUDE_GENERIC_SERIAL");
+  const bool include_generic = generic_setting != nullptr && std::string(generic_setting) == "1";
   while (dirent* ent = ::readdir(dir)) {
     const std::string name = ent->d_name;
-    if (!driver_port_name(name) && !extra_port_name(name)) continue;
+    if (!serial_port_name_is_candidate(name, include_generic)) continue;
     if (name.compare(0, 3, "cu.") != 0 && name.compare(0, 4, "tty.") != 0 &&
         name.compare(0, 6, "ttyUSB") != 0 && name.compare(0, 4, "ttyS") != 0) {
       continue;

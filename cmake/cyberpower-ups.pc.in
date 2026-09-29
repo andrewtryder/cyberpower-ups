@@ -6,5 +6,7 @@ includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
 Name: cyberpower-ups
 Description: @PROJECT_DESCRIPTION@
 Version: @PROJECT_VERSION@
-Libs: -L${libdir} -lcyberpower-ups
+Libs: -L${libdir} -lcyberpower-ups @PC_PLATFORM_LIBS@
+# Keep Cflags usable by C callers of ups.h. C++ consumers must select C++17,
+# as required by the C++ public API.
 Cflags: -I${includedir}

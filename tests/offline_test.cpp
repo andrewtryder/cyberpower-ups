@@ -1,12 +1,19 @@
 #include "cyberpower/protocol.hpp"
 #include "cyberpower/ups.hpp"
+#include "internal/device_helpers.hpp"
+#include "internal/parse_integer.hpp"
+#include "internal/serial_discovery.hpp"
+#include "internal/serial_write.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace {
 
@@ -54,6 +61,93 @@ bool test_hardcoded_frames() {
   const auto parsed = cyberpower::protocol::parse_v2e_status(frame_a, false);
   const double battery = cyberpower::protocol::nominal_from_stored('B', parsed.fields.at('B').stored);
   if (!approx(battery, 95.0)) return fail("battery nominal");
+  return true;
+}
+
+bool test_malformed_numbers() {
+  using cyberpower::Error;
+  for (const std::string& wire : {"#B\r", "#I\r", "#R\r", "#B1.\r", "#B.1\r",
+                                  "#B999999999999999999999999\r", "#B9999999k\r"}) {
+    if (cyberpower::protocol::parse_v2e_status(wire, false).error != Error::RespNotNumber) {
+      return fail("malformed numeric field accepted: " + wire);
+    }
+  }
+  const auto outlet = cyberpower::protocol::parse_v2e_status("#W\r", false);
+  return outlet.ok && outlet.outlet_state.empty() ? true : fail("empty W tail rejected");
+}
+
+bool test_pure_helpers() {
+  int value = 0;
+  if (!cyberpower::internal::parse_int_strict("123", value) || value != 123 ||
+      cyberpower::internal::parse_int_strict("", value) ||
+      cyberpower::internal::parse_int_strict("12x", value) ||
+      cyberpower::internal::parse_int_strict("999999999999999999999", value)) {
+    return fail("strict integer parsing");
+  }
+  if (!cyberpower::platform::serial_port_name_is_candidate("cu.wchusbserial42", false) ||
+      cyberpower::platform::serial_port_name_is_candidate("cu.usbmodem123", false) ||
+      !cyberpower::platform::serial_port_name_is_candidate("cu.usbmodem123", true)) {
+    return fail("serial discovery filtering");
+  }
+  if (!cyberpower::protocol::battery_usage_67_is_legacy_full_capacity(0, 1000) ||
+      cyberpower::protocol::battery_usage_67_is_legacy_full_capacity(0, 100)) {
+    return fail("battery usage 0x67 descriptor disambiguation");
+  }
+  return true;
+}
+
+bool test_nonblocking_write_timeout() {
+  int pipefd[2] = {-1, -1};
+  if (::pipe(pipefd) != 0) return fail("pipe setup");
+  const int flags = ::fcntl(pipefd[1], F_GETFL, 0);
+  if (flags < 0 || ::fcntl(pipefd[1], F_SETFL, flags | O_NONBLOCK) != 0) {
+    ::close(pipefd[0]);
+    ::close(pipefd[1]);
+    return fail("pipe nonblocking setup");
+  }
+  char fill[4096]{};
+  while (::write(pipefd[1], fill, sizeof fill) > 0) {}
+  const auto start = std::chrono::steady_clock::now();
+  const auto result = cyberpower::platform::write_all_nonblocking(pipefd[1], "x", 1, 20);
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  ::close(pipefd[0]);
+  ::close(pipefd[1]);
+  if (result != cyberpower::Error::Timeout || elapsed > std::chrono::seconds(1)) {
+    return fail("nonblocking write timeout");
+  }
+  return true;
+}
+
+class MockTransport final : public cyberpower::platform::Transport {
+ public:
+  cyberpower::DeviceInfo device_info;
+  cyberpower::Error read_result = cyberpower::Error::NotSupported;
+  int alarm_value = cyberpower::protocol::kAlarmEnable;
+  cyberpower::Error set_result = cyberpower::Error::Ok;
+  cyberpower::Error transact_result = cyberpower::Error::Ok;
+  int set_calls = 0;
+  int transact_calls = 0;
+  int last_set = 0;
+  const cyberpower::DeviceInfo& info() const override { return device_info; }
+  cyberpower::Status read_status() override { return {}; }
+  cyberpower::Error transact(const std::string&, std::string&) override { ++transact_calls; return transact_result; }
+  cyberpower::Error get_alarm_control(int& value) override { value = alarm_value; return read_result; }
+  cyberpower::Error set_alarm_control(int value) override { ++set_calls; last_set = value; return set_result; }
+};
+
+bool test_toggle_buzzer() {
+  MockTransport mock;
+  mock.read_result = cyberpower::Error::Ok;
+  if (cyberpower::internal::toggle_buzzer(mock) != cyberpower::Error::Ok || mock.set_calls != 1 ||
+      mock.last_set != cyberpower::protocol::kAlarmMute || mock.transact_calls != 0) return fail("toggle HID success");
+  mock = MockTransport{};
+  mock.read_result = cyberpower::Error::NotSupported;
+  if (cyberpower::internal::toggle_buzzer(mock) != cyberpower::Error::Ok || mock.set_calls != 0 ||
+      mock.transact_calls != 1) return fail("toggle serial fallback");
+  mock = MockTransport{};
+  mock.read_result = cyberpower::Error::Io;
+  if (cyberpower::internal::toggle_buzzer(mock) != cyberpower::Error::Io || mock.set_calls != 0 ||
+      mock.transact_calls != 0) return fail("toggle propagates HID I/O error");
   return true;
 }
 
@@ -177,6 +271,10 @@ int main() {
 
   if (!test_protocol_constants()) return 1;
   std::cout << "offline_test: protocol constants ok\n";
+
+  if (!test_malformed_numbers() || !test_pure_helpers() || !test_nonblocking_write_timeout() ||
+      !test_toggle_buzzer()) return 1;
+  std::cout << "offline_test: regression helpers ok\n";
 
   // Always try the synthetic example shipped in-tree.
   if (!maybe_load_json_fixture(fixture_path("synthetic_status.json"))) return 1;

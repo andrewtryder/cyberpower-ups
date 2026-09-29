@@ -55,9 +55,9 @@ struct Status {
   std::optional<bool> discharging;
 
   // --- Extended HID-only fields ---
-  // Firmware version string from the device (HID 0x84/0xFE, High confidence).
-  // On CP1500PFCLCDa: the IOKit product string or HID iProduct usage.
-  // Empty when not available or not a HID device.
+  // Reserved for a validated device firmware string. HID 0x84/0xFE can resolve
+  // to USB iProduct (the product name) on known devices, so it is deliberately
+  // unavailable until a reliable distinct firmware string is recovered.
   std::optional<std::string> firmware_version;
 
   // Battery extras (HID Battery System page, High confidence on page/usage).

@@ -204,9 +204,13 @@ ups->monitor(opts, [](const cyberpower::Status& s) {
 }, stop);
 ```
 
-`cyberpower::status_changed(prev, next)` compares engineering fields (with a small numeric epsilon). The C API mirror is `cp_ups_monitor(...)` with a `volatile int* stop_flag`.
+`cyberpower::status_changed(prev, next)` compares engineering fields (with a small numeric epsilon). The C API has two monitor variants: `cp_ups_monitor(...)` accepts a `volatile sig_atomic_t*` only for a signal handler; `cp_ups_monitor_with_stop_token(...)` uses a thread-safe stop token for another thread. An ordinary `volatile int` is not thread synchronization.
 
 A pure C API is also available in `cyberpower/ups.h` (`cp_ups_self_test`, `cp_ups_toggle_buzzer`, `cp_ups_monitor`, …).
+
+### Serial discovery safety
+
+By default serial discovery only includes port-name patterns explicitly named by the recovered driver. Generic macOS USB-serial names are excluded so the default command does not send `D\r` to arbitrary peripherals. Set `CPUPS_INCLUDE_GENERIC_SERIAL=1` only when you intentionally want to probe those generic ports; all other values leave them excluded.
 
 ### Headers
 

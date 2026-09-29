@@ -1,6 +1,10 @@
 #include "cyberpower/protocol.hpp"
 
+#include <cerrno>
+#include <charconv>
 #include <cmath>
+#include <cstdlib>
+#include <limits>
 #include <sstream>
 
 namespace cyberpower::protocol {
@@ -26,25 +30,50 @@ int32_t turn_to_number(const std::string& token, bool hex, bool* ok) {
     *ok = false;
     return 0;
   }
-  try {
-    int32_t scaled = 0;
-    if (body.find('.') == std::string::npos) {
-      int base = hex ? 16 : 10;
-      long v = std::stol(body, nullptr, base);
-      scaled = static_cast<int32_t>(v * kNumberScale);
-    } else {
-      double v = std::stod(body);
-      scaled = static_cast<int32_t>(std::trunc(v * static_cast<double>(kNumberScale)));
+  int64_t scaled = 0;
+  if (body.find('.') == std::string::npos) {
+    int64_t value = 0;
+    const auto parsed = std::from_chars(body.data(), body.data() + body.size(), value,
+                                        hex ? 16 : 10);
+    if (parsed.ec != std::errc{} || parsed.ptr != body.data() + body.size()) {
+      *ok = false;
+      return 0;
     }
-    if (kilo) {
-      scaled = static_cast<int32_t>(static_cast<int64_t>(scaled) * kNumberScale);
+    if (value > std::numeric_limits<int64_t>::max() / kNumberScale) {
+      *ok = false;
+      return 0;
     }
-    *ok = true;
-    return scaled;
-  } catch (...) {
+    scaled = value * kNumberScale;
+  } else {
+    // A decimal token needs digits on both sides of its single decimal point.
+    // strtod alone would accept incomplete tokens such as "1.".
+    if (hex || body.find('.') != body.rfind('.') || body.front() == '.' || body.back() == '.') {
+      *ok = false;
+      return 0;
+    }
+    errno = 0;
+    char* consumed = nullptr;
+    const double value = std::strtod(body.c_str(), &consumed);
+    if (errno == ERANGE || consumed != body.c_str() + body.size() || !std::isfinite(value) ||
+        value > static_cast<double>(std::numeric_limits<int32_t>::max()) / kNumberScale) {
+      *ok = false;
+      return 0;
+    }
+    scaled = static_cast<int64_t>(std::trunc(value * static_cast<double>(kNumberScale)));
+  }
+  if (kilo) {
+    if (scaled > std::numeric_limits<int32_t>::max() / kNumberScale) {
+      *ok = false;
+      return 0;
+    }
+    scaled *= kNumberScale;
+  }
+  if (scaled > std::numeric_limits<int32_t>::max()) {
     *ok = false;
     return 0;
   }
+  *ok = true;
+  return static_cast<int32_t>(scaled);
 }
 
 int32_t minutes_scaled_to_seconds(int32_t scaled) {
@@ -91,7 +120,7 @@ StatusFrame parse_v2e_status(const std::string& frame, bool hex_numbers) {
     field.token = frame.substr(start, i - start);
     bool ok = false;
     int32_t stored = turn_to_number(field.token, hex_numbers, &ok);
-    if (!field.token.empty() && !ok) {
+    if (field.token.empty() || !ok) {
       out.error = Error::RespNotNumber;
       return out;
     }
@@ -108,6 +137,10 @@ StatusFrame parse_v2e_status(const std::string& frame, bool hex_numbers) {
   out.ok = true;
   out.error = Error::Ok;
   return out;
+}
+
+bool battery_usage_67_is_legacy_full_capacity(int logical_min, int logical_max) {
+  return logical_min >= 0 && logical_max > 200;
 }
 
 double nominal_from_stored(char tag, int32_t stored) {

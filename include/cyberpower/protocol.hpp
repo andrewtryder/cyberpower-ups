@@ -134,6 +134,12 @@ struct StatusFrame {
 // bool constructor argument). High that the flag switches the charset.
 StatusFrame parse_v2e_status(const std::string& frame, bool hex_numbers = false);
 
+// 0x85/0x67 is Temperature in RE-confirmed modern descriptors, but older
+// firmware used it for FullChargeCapacity. A descriptor whose logical maximum
+// exceeds a plausible temperature range is treated as the legacy capacity.
+// Medium: compatibility rule based on descriptor metadata, not value alone.
+bool battery_usage_67_is_legacy_full_capacity(int logical_min, int logical_max);
+
 // Nominal (divide stored by 1000) for ordinary fields. For 'C' and 'R',
 // `stored` is already seconds.
 double nominal_from_stored(char tag, int32_t stored);

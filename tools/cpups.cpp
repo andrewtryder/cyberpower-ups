@@ -1,5 +1,6 @@
 #include "cyberpower/protocol.hpp"
 #include "cyberpower/ups.hpp"
+#include "internal/parse_integer.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -419,8 +420,7 @@ int main(int argc, char** argv) {
         usage(argv[0]);
         return 2;
       }
-      interval_ms = std::atoi(argv[++i]);
-      if (interval_ms <= 0) {
+      if (!cyberpower::internal::parse_int_strict(argv[++i], interval_ms) || interval_ms <= 0) {
         std::cerr << "invalid --interval; expected positive milliseconds\n";
         return 2;
       }
@@ -448,24 +448,22 @@ int main(int argc, char** argv) {
       if (!set_device_action(device_action, DeviceAction::BuzzerTest)) return 2;
     } else if (arg == "--set-sensitivity") {
       if (i + 1 >= argc) { usage(argv[0]); return 2; }
-      g_action_param = std::atoi(argv[++i]);
-      if (g_action_param < 1 || g_action_param > 3) {
+      if (!cyberpower::internal::parse_int_strict(argv[++i], g_action_param) ||
+          g_action_param < 1 || g_action_param > 3) {
         std::cerr << "--set-sensitivity: value must be 1 (High), 2 (Medium), or 3 (Low)\n";
         return 2;
       }
       if (!set_device_action(device_action, DeviceAction::SetSensitivity)) return 2;
     } else if (arg == "--set-shutdown-delay") {
       if (i + 1 >= argc) { usage(argv[0]); return 2; }
-      g_action_param = std::atoi(argv[++i]);
-      if (g_action_param < 0) {
+      if (!cyberpower::internal::parse_int_strict(argv[++i], g_action_param) || g_action_param < 0) {
         std::cerr << "--set-shutdown-delay: value must be non-negative seconds\n";
         return 2;
       }
       if (!set_device_action(device_action, DeviceAction::SetShutdownDelay)) return 2;
     } else if (arg == "--set-restore-delay") {
       if (i + 1 >= argc) { usage(argv[0]); return 2; }
-      g_action_param = std::atoi(argv[++i]);
-      if (g_action_param < 0) {
+      if (!cyberpower::internal::parse_int_strict(argv[++i], g_action_param) || g_action_param < 0) {
         std::cerr << "--set-restore-delay: value must be non-negative seconds\n";
         return 2;
       }

@@ -160,14 +160,8 @@ class HidTransport : public Transport {
 
       const char* mapped_to = nullptr;
 
-      // Only map core status from Input elements
-      bool is_input = (type == kIOHIDElementTypeInput_Misc ||
-                       type == kIOHIDElementTypeInput_Button ||
-                       type == kIOHIDElementTypeInput_Axis ||
-                       type == kIOHIDElementTypeInput_ScanCodes);
-      // Removed the strict is_input requirement for core fields since CyberPower
-      // frequently maps status to Feature elements. We keep is_input just for logging
-      // if needed, but we don't filter on it.
+      // CyberPower frequently maps status to Feature elements, so core fields
+      // deliberately are not restricted to Input elements.
 
       // ---------------------------------------------------------------
       // Power Device page (0x84)
@@ -210,8 +204,18 @@ class HidTransport : public Transport {
       } else if (page == protocol::kPageBattery && usage == protocol::kUsageFullChargeCapacity) {
         full = value; got_full = true; mapped_to = "full_cap(8D)";
       } else if (page == protocol::kPageBattery && usage == protocol::kUsageTemperatureBat) {
-        // Only use 0x67 if older temp wasn't set, and ignore 100°C which is a common dummy value.
-        if (!got_temp && value < 99.0) { temp = value; got_temp = true; mapped_to = "temp(67_new)"; }
+        // 0x67 is Temperature in the modern RE-confirmed table, but older
+        // firmware used the same usage for FullChargeCapacity. Disambiguate
+        // from descriptor metadata rather than the live value: a capacity
+        // element has a range beyond plausible Celsius values. This keeps the
+        // later legacy mapping reachable without reclassifying all 0x67 data.
+        const int logical_min = static_cast<int>(IOHIDElementGetLogicalMin(element));
+        const int logical_max = static_cast<int>(IOHIDElementGetLogicalMax(element));
+        if (protocol::battery_usage_67_is_legacy_full_capacity(logical_min, logical_max)) {
+          if (!got_full) { full = value; got_full = true; mapped_to = "full_cap(67_legacy)"; }
+        } else if (!got_temp && value < 99.0) {
+          temp = value; got_temp = true; mapped_to = "temp(67_new)";
+        }
       } else if (page == protocol::kPageBattery && usage == protocol::kUsageCycleCount) {
         cycle_count_val = value; got_cycle = true; mapped_to = "cycle_count(8C)";
       } else if (page == protocol::kPageBattery && usage == protocol::kUsageNeedReplacement) {
@@ -219,23 +223,23 @@ class HidTransport : public Transport {
           need_repl_val = value != 0.0; got_need_repl = true; mapped_to = "need_repl(29)";
         }
       } else if (page == protocol::kPageBattery && usage == protocol::kUsageCharging) { // 0x68
-        if (value == 0.0 || value == 1.0) {
+        const bool legacy_numeric = IOHIDElementGetLogicalMax(element) > 1;
+        if (!legacy_numeric && (value == 0.0 || value == 1.0)) {
           status.charging = value != 0.0; mapped_to = "charging(68)";
-        } else if (value > 1.0) {
+        } else if (legacy_numeric) {
           runtime = value; got_runtime = true; mapped_to = "runtime(68_legacy)";
         }
       } else if (page == protocol::kPageBattery && usage == protocol::kUsageDischarging) { // 0x66
-        if (value == 0.0 || value == 1.0) {
+        const bool legacy_numeric = IOHIDElementGetLogicalMax(element) > 1;
+        if (!legacy_numeric && (value == 0.0 || value == 1.0)) {
           status.discharging = value != 0.0; mapped_to = "discharging(66)";
-        } else if (value > 1.0) {
+        } else if (legacy_numeric) {
           remain = value; got_remain = true; mapped_to = "remain(66_legacy)";
         }
 
       // ---------------------------------------------------------------
       // Battery System page (0x85) — older / alternative usages
       // ---------------------------------------------------------------
-      } else if (page == protocol::kPageBattery && usage == 0x67) {
-        if (!got_full) { full = value; got_full = true; mapped_to = "full_cap(67_legacy)"; }
       } else if ((page == protocol::kPageBattery && usage == 0xD0) ||
                  (page == protocol::kPageVendorFf01 && usage == 0xD0)) {
         if (value == 0.0 || value == 1.0) {
@@ -286,7 +290,7 @@ class HidTransport : public Transport {
       // RemainingCapacity is a percent on most of these UPSes. If the
       // device also exposes a larger full-charge capacity, convert.
       // Medium: the HID unit is not printed in the driver.
-      if (got_full && full > 0.0 && remain > 100.0) {
+      if (got_full && full > 0.0 && (remain > 100.0 || full > 100.0)) {
         status.battery_percent = (remain / full) * 100.0;
       } else {
         status.battery_percent = remain;
