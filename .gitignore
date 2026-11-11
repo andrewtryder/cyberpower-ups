@@ -14,6 +14,8 @@ CMakeFiles/
 .vscode/
 compile_commands.json
 .cache/
+__pycache__/
+*.pyc
 
 # Local real-device captures (may contain serial numbers)
 fixtures/cp*.json
@@ -22,3 +24,8 @@ fixtures/cp*.bin
 fixtures/cp*.hex
 fixtures/*_raw.txt
 !fixtures/synthetic_status.json
+
+# Local environment & secrets
+.env
+.env.*
+
