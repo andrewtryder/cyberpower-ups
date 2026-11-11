@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/cyberpower-logo.png" alt="CyberPower UPS" width="600">
+</p>
+
 # cyberpower-ups
 
 **cyberpower-ups** is a native **C++17 library, pure C API, and CLI** for monitoring CyberPower uninterruptible power supplies (UPS) over **USB HID** and **serial**. It reports battery level, runtime, voltages, output load, and power state. Selected hardware controls are also implemented where supported.
