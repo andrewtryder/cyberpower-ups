@@ -18,5 +18,7 @@ compile_commands.json
 # Local real-device captures (may contain serial numbers)
 fixtures/cp*.json
 fixtures/cp*.txt
+fixtures/cp*.bin
+fixtures/cp*.hex
 fixtures/*_raw.txt
 !fixtures/synthetic_status.json

@@ -46,8 +46,8 @@ jobs:
           c++ consumer-c-api.o $(pkg-config --libs cyberpower-ups) -o consumer-c-api
           ./consumer-c-api
 
-  ubuntu-stub:
-    name: Ubuntu stub build + self-test
+  ubuntu:
+    name: Ubuntu build + self-test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

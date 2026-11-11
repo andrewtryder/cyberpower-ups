@@ -1,7 +1,7 @@
 #include "internal/transport.hpp"
 
 #include "cyberpower/protocol.hpp"
-#include "hid_mapping.hpp"
+#include "internal/hid_mapping.hpp"
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/hid/IOHIDManager.h>
@@ -43,6 +43,33 @@ bool read_physical(IOHIDDeviceRef device, IOHIDElementRef element, double& out) 
   // Medium: fall back only in that case.
   if (out == 0.0 && logical != 0) out = static_cast<double>(logical);
   return true;
+}
+
+HidElement to_hid_element(IOHIDElementRef element) {
+  HidElement desc;
+  desc.page = IOHIDElementGetUsagePage(element);
+  desc.usage = IOHIDElementGetUsage(element);
+  const IOHIDElementType type = IOHIDElementGetType(element);
+  if (type == kIOHIDElementTypeInput_Misc ||
+      type == kIOHIDElementTypeInput_Button ||
+      type == kIOHIDElementTypeInput_Axis ||
+      type == kIOHIDElementTypeInput_ScanCodes) {
+    desc.type = HidElementType::Input;
+  } else if (type == kIOHIDElementTypeFeature) {
+    desc.type = HidElementType::Feature;
+  } else if (type == kIOHIDElementTypeOutput) {
+    desc.type = HidElementType::Output;
+  } else {
+    desc.type = HidElementType::Other;
+  }
+  desc.logical_min = static_cast<int>(IOHIDElementGetLogicalMin(element));
+  desc.logical_max = static_cast<int>(IOHIDElementGetLogicalMax(element));
+  desc.report_id = IOHIDElementGetReportID(element);
+  for (IOHIDElementRef parent = IOHIDElementGetParent(element); parent != nullptr;
+       parent = IOHIDElementGetParent(parent)) {
+    desc.ancestors.emplace_back(IOHIDElementGetUsagePage(parent), IOHIDElementGetUsage(parent));
+  }
+  return desc;
 }
 
 // Prefer Feature, then Output, for writable control elements.
@@ -123,13 +150,14 @@ class HidTransport : public Transport {
       double value = 0;
       if (!read_physical(device_, element, value)) continue;
 
-      const char* mapped_to = map_element(element, value, readings, status);
+      const HidElement desc = to_hid_element(element);
+      const char* mapped_to = map_element(desc, value, readings, status);
       if (raw_dump_sink() != nullptr && mapped_to != nullptr) {
         char line[128];
         std::snprintf(line, sizeof line, "elem [%s] id=%u pg=%04x ug=%04x val=%g -> %s",
-                      element_type_label(IOHIDElementGetType(element)),
-                      IOHIDElementGetReportID(element), IOHIDElementGetUsagePage(element),
-                      IOHIDElementGetUsage(element), value, mapped_to);
+                      element_type_label(desc.type),
+                      desc.report_id, desc.page,
+                      desc.usage, value, mapped_to);
         dump_raw_line(line);
       }
     }
