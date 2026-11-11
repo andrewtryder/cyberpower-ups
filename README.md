@@ -218,7 +218,7 @@ By default serial discovery only includes port-name patterns explicitly named by
 |--------|---------|
 | `include/cyberpower/ups.hpp` | Main C++ API (`list_devices`, `open_device`, `read_status`, …) |
 | `include/cyberpower/ups.h` | Same operations as a C API |
-| `include/cyberpower/protocol.hpp` | Commands, parsers, HID usages |
+| `include/cyberpower/protocol.hpp` | Umbrella for `protocol_text.hpp` (commands, v2e parser), `protocol_v3.hpp` (binary framing) and `protocol_hid.hpp` (HID usages) |
 | `include/cyberpower/errors.hpp` | `UPS_ERR_*` and `RESP_ERR_*` |
 
 ---
@@ -229,9 +229,9 @@ By default serial discovery only includes port-name patterns explicitly named by
 cyberpower-ups/
 ├── include/cyberpower/   # Public headers
 ├── src/
-│   ├── platform/macos/   # IOKit + termios
+│   ├── platform/macos/   # IOKit (hid_macos = device I/O, hid_mapping = usage mapping) + termios
 │   └── platform/windows/ # Stub / extension points for SetupAPI + COM
-├── tools/cpups.cpp       # Command-line tool
+├── tools/                # cpups CLI (cpups.cpp, cpups_args, cpups_format)
 ├── tests/                # Offline CTest (no UPS required)
 ├── fixtures/             # Capture instructions + optional dumps
 ├── examples/             # Library samples
