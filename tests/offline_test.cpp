@@ -241,7 +241,10 @@ bool test_protocol_constants() {
   if (kUsageRemainingCapacity  != 0x002C) return fail("kUsageRemainingCapacity");
   if (kUsageRunTimeToEmpty     != 0x008B) return fail("kUsageRunTimeToEmpty");
   if (kUsageCycleCount         != 0x008C) return fail("kUsageCycleCount");
-  if (kUsageNeedReplacement    != 0x0029) return fail("kUsageNeedReplacement");
+  if (kUsageNeedReplacement    != 0x004B) return fail("kUsageNeedReplacement");
+  if (kUsageNeedReplacementStd != 0x004B) return fail("kUsageNeedReplacementStd");
+  if (kUsageRemainingCapacityLimit != 0x0029) return fail("kUsageRemainingCapacityLimit");
+  if (kUsageAtRate             != 0x002B) return fail("kUsageAtRate");
   if (kUsageCharging           != 0x0068) return fail("kUsageCharging");
   if (kUsageDischarging        != 0x0066) return fail("kUsageDischarging");
   // RE-confirmed Power Device usages.
@@ -417,46 +420,77 @@ bool test_posix_termios_configuration() {
 
   // Pseudo-terminal test: verify applying settings and round-trip communication
   const int master_fd = ::posix_openpt(O_RDWR | O_NOCTTY);
-  if (master_fd >= 0) {
-    if (::grantpt(master_fd) == 0 && ::unlockpt(master_fd) == 0) {
-      char* slave_name = ::ptsname(master_fd);
-      if (slave_name != nullptr) {
-        const int slave_fd = ::open(slave_name, O_RDWR | O_NOCTTY | O_NONBLOCK);
-        if (slave_fd >= 0) {
-          termios slave_tio{};
-          if (::tcgetattr(slave_fd, &slave_tio) == 0) {
-            if (configure_posix_termios(slave_tio, 2400, err)) {
-              if (::tcsetattr(slave_fd, TCSANOW, &slave_tio) == 0) {
-                termios verified{};
-                if (::tcgetattr(slave_fd, &verified) == 0) {
-                  if ((verified.c_cflag & CSIZE) != CS8 || (verified.c_cflag & PARENB) ||
-                      (verified.c_cflag & CSTOPB)) {
-                    ::close(slave_fd);
-                    ::close(master_fd);
-                    return fail("pty slave termios flags mismatch");
-                  }
-                }
-                // Test basic data transmission through PTY pair
-                const char tx_buf[] = "D\r";
-                if (::write(slave_fd, tx_buf, sizeof(tx_buf) - 1) == sizeof(tx_buf) - 1) {
-                  char rx_buf[16]{};
-                  if (::read(master_fd, rx_buf, sizeof(rx_buf)) > 0) {
-                    if (rx_buf[0] != 'D' || rx_buf[1] != '\r') {
-                      ::close(slave_fd);
-                      ::close(master_fd);
-                      return fail("pty data mismatch");
-                    }
-                  }
-                }
-              }
-            }
-          }
-          ::close(slave_fd);
-        }
-      }
-    }
-    ::close(master_fd);
+  if (master_fd < 0) {
+    return fail("posix_openpt failed");
   }
+  if (::grantpt(master_fd) != 0) {
+    ::close(master_fd);
+    return fail("grantpt failed");
+  }
+  if (::unlockpt(master_fd) != 0) {
+    ::close(master_fd);
+    return fail("unlockpt failed");
+  }
+  char* slave_name = ::ptsname(master_fd);
+  if (slave_name == nullptr) {
+    ::close(master_fd);
+    return fail("ptsname returned null");
+  }
+  const int slave_fd = ::open(slave_name, O_RDWR | O_NOCTTY | O_NONBLOCK);
+  if (slave_fd < 0) {
+    ::close(master_fd);
+    return fail(std::string("failed to open pty slave: ") + slave_name);
+  }
+  termios slave_tio{};
+  if (::tcgetattr(slave_fd, &slave_tio) != 0) {
+    ::close(slave_fd);
+    ::close(master_fd);
+    return fail("tcgetattr on slave failed");
+  }
+  if (!configure_posix_termios(slave_tio, 2400, err)) {
+    ::close(slave_fd);
+    ::close(master_fd);
+    return fail("configure_posix_termios on slave failed: " + err);
+  }
+  if (::tcsetattr(slave_fd, TCSANOW, &slave_tio) != 0) {
+    ::close(slave_fd);
+    ::close(master_fd);
+    return fail("tcsetattr on slave failed");
+  }
+  termios verified{};
+  if (::tcgetattr(slave_fd, &verified) != 0) {
+    ::close(slave_fd);
+    ::close(master_fd);
+    return fail("second tcgetattr on slave failed");
+  }
+  if ((verified.c_cflag & CSIZE) != CS8 || (verified.c_cflag & PARENB) ||
+      (verified.c_cflag & CSTOPB) || (verified.c_cflag & (CLOCAL | CREAD)) != (CLOCAL | CREAD)) {
+    ::close(slave_fd);
+    ::close(master_fd);
+    return fail("pty slave termios flags mismatch");
+  }
+  // Test basic data transmission through PTY pair
+  const char tx_buf[] = "D\r";
+  const ssize_t bytes_written = ::write(slave_fd, tx_buf, sizeof(tx_buf) - 1);
+  if (bytes_written != static_cast<ssize_t>(sizeof(tx_buf) - 1)) {
+    ::close(slave_fd);
+    ::close(master_fd);
+    return fail("pty write failed to transmit expected byte count");
+  }
+  char rx_buf[16]{};
+  const ssize_t bytes_read = ::read(master_fd, rx_buf, sizeof(rx_buf));
+  if (bytes_read != bytes_written) {
+    ::close(slave_fd);
+    ::close(master_fd);
+    return fail("pty read failed to receive expected byte count");
+  }
+  if (std::string_view(rx_buf, static_cast<size_t>(bytes_read)) != "D\r") {
+    ::close(slave_fd);
+    ::close(master_fd);
+    return fail("pty data mismatch");
+  }
+  ::close(slave_fd);
+  ::close(master_fd);
 #endif
   return true;
 }
@@ -550,17 +584,17 @@ bool test_battery_replacement_handling() {
     return fail("report 0x07 cycle count not mapped");
   }
 
-  // Shared mapping tests for kUsageNeedReplacementStd (0x2B)
+  // Shared mapping tests for kUsageNeedReplacement (0x4B)
   r = Readings{};
   s = cyberpower::Status{};
   HidElement repl_elem;
   repl_elem.page = cyberpower::protocol::kPageBattery;
-  repl_elem.usage = cyberpower::protocol::kUsageNeedReplacementStd; // 0x2B
+  repl_elem.usage = cyberpower::protocol::kUsageNeedReplacement; // 0x4B
 
   map_element(repl_elem, 1.0, r, s);
   apply_readings(r, s);
   if (!s.need_replacement || *s.need_replacement != true) {
-    return fail("kUsageNeedReplacementStd 1.0 must set need_replacement true");
+    return fail("kUsageNeedReplacement 1.0 must set need_replacement true");
   }
 
   r = Readings{};
@@ -568,7 +602,7 @@ bool test_battery_replacement_handling() {
   map_element(repl_elem, 0.0, r, s);
   apply_readings(r, s);
   if (!s.need_replacement || *s.need_replacement != false) {
-    return fail("kUsageNeedReplacementStd 0.0 must set need_replacement false");
+    return fail("kUsageNeedReplacement 0.0 must set need_replacement false");
   }
 
   r = Readings{};
@@ -576,19 +610,35 @@ bool test_battery_replacement_handling() {
   map_element(repl_elem, 20.0, r, s); // non-flag value
   apply_readings(r, s);
   if (s.need_replacement.has_value()) {
-    return fail("kUsageNeedReplacementStd non-flag must not set need_replacement");
+    return fail("kUsageNeedReplacement non-flag must not set need_replacement");
   }
 
-  // 0x29 with non-flag threshold (e.g. 10.0 or 20.0) must not set need_replacement
-  r = Readings{};
-  s = cyberpower::Status{};
-  HidElement cap_limit_elem;
-  cap_limit_elem.page = cyberpower::protocol::kPageBattery;
-  cap_limit_elem.usage = cyberpower::protocol::kUsageNeedReplacement; // 0x29
-  map_element(cap_limit_elem, 10.0, r, s);
-  apply_readings(r, s);
-  if (s.need_replacement.has_value()) {
-    return fail("kUsageNeedReplacement numeric threshold must not set need_replacement");
+  // 0x29 (RemainingCapacityLimit) must NEVER set need_replacement, even for 0 or 1
+  for (double val : {0.0, 1.0, 10.0, 20.0}) {
+    r = Readings{};
+    s = cyberpower::Status{};
+    HidElement cap_limit_elem;
+    cap_limit_elem.page = cyberpower::protocol::kPageBattery;
+    cap_limit_elem.usage = cyberpower::protocol::kUsageRemainingCapacityLimit; // 0x29
+    map_element(cap_limit_elem, val, r, s);
+    apply_readings(r, s);
+    if (s.need_replacement.has_value()) {
+      return fail("kUsageRemainingCapacityLimit must never set need_replacement");
+    }
+  }
+
+  // 0x2B (AtRate) must NEVER set need_replacement, even for 0 or 1
+  for (double val : {0.0, 1.0, 50.0}) {
+    r = Readings{};
+    s = cyberpower::Status{};
+    HidElement at_rate_elem;
+    at_rate_elem.page = cyberpower::protocol::kPageBattery;
+    at_rate_elem.usage = cyberpower::protocol::kUsageAtRate; // 0x2B
+    map_element(at_rate_elem, val, r, s);
+    apply_readings(r, s);
+    if (s.need_replacement.has_value()) {
+      return fail("kUsageAtRate must never set need_replacement");
+    }
   }
 
   return true;

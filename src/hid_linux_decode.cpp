@@ -13,16 +13,16 @@ bool is_verified_hid_profile(uint16_t vid, uint16_t pid) {
   return vid == protocol::kVendorId && pid == protocol::kPid0601;
 }
 
-bool validate_feature_report(const uint8_t* buf, ssize_t bytes_read,
+bool validate_feature_report(const uint8_t* buf, std::ptrdiff_t bytes_read,
                              uint8_t expected_id, std::size_t min_len) {
   if (buf == nullptr || min_len < 1) return false;
-  if (bytes_read < static_cast<ssize_t>(min_len)) return false;
+  if (bytes_read < static_cast<std::ptrdiff_t>(min_len)) return false;
   if (buf[0] != expected_id) return false;
   return true;
 }
 
 bool decode_cp1500_report_0b(const uint8_t* buf, std::size_t len, Readings& r, Status& s) {
-  if (!validate_feature_report(buf, static_cast<ssize_t>(len), 0x0B, 2)) return false;
+  if (!validate_feature_report(buf, static_cast<std::ptrdiff_t>(len), 0x0B, 2)) return false;
   const uint8_t flags = buf[1];
 
   HidElement ac_elem;
@@ -44,7 +44,7 @@ bool decode_cp1500_report_0b(const uint8_t* buf, std::size_t len, Readings& r, S
 }
 
 bool decode_cp1500_report_08(const uint8_t* buf, std::size_t len, Readings& r, Status& s) {
-  if (!validate_feature_report(buf, static_cast<ssize_t>(len), 0x08, 4)) return false;
+  if (!validate_feature_report(buf, static_cast<std::ptrdiff_t>(len), 0x08, 4)) return false;
 
   // buf[1]: Remaining capacity percent (0-100)
   if (buf[1] <= 100) {
@@ -67,7 +67,7 @@ bool decode_cp1500_report_08(const uint8_t* buf, std::size_t len, Readings& r, S
 }
 
 bool decode_cp1500_report_0f(const uint8_t* buf, std::size_t len, Readings& r, Status& s) {
-  if (!validate_feature_report(buf, static_cast<ssize_t>(len), 0x0F, 3)) return false;
+  if (!validate_feature_report(buf, static_cast<std::ptrdiff_t>(len), 0x0F, 3)) return false;
   HidElement in_elem;
   in_elem.page = protocol::kPagePowerDevice;
   in_elem.usage = protocol::kUsageVoltage;
@@ -78,7 +78,7 @@ bool decode_cp1500_report_0f(const uint8_t* buf, std::size_t len, Readings& r, S
 }
 
 bool decode_cp1500_report_12(const uint8_t* buf, std::size_t len, Readings& r, Status& s) {
-  if (!validate_feature_report(buf, static_cast<ssize_t>(len), 0x12, 3)) return false;
+  if (!validate_feature_report(buf, static_cast<std::ptrdiff_t>(len), 0x12, 3)) return false;
   HidElement out_elem;
   out_elem.page = protocol::kPagePowerDevice;
   out_elem.usage = protocol::kUsageVoltage;
@@ -89,7 +89,7 @@ bool decode_cp1500_report_12(const uint8_t* buf, std::size_t len, Readings& r, S
 }
 
 bool decode_cp1500_report_13(const uint8_t* buf, std::size_t len, Readings& r, Status& s) {
-  if (!validate_feature_report(buf, static_cast<ssize_t>(len), 0x13, 2)) return false;
+  if (!validate_feature_report(buf, static_cast<std::ptrdiff_t>(len), 0x13, 2)) return false;
   if (buf[1] <= 100) {
     HidElement load_elem;
     load_elem.page = protocol::kPagePowerDevice;
@@ -100,7 +100,7 @@ bool decode_cp1500_report_13(const uint8_t* buf, std::size_t len, Readings& r, S
 }
 
 bool decode_cp1500_report_0a(const uint8_t* buf, std::size_t len, Readings& r, Status& s) {
-  if (!validate_feature_report(buf, static_cast<ssize_t>(len), 0x0A, 3)) return false;
+  if (!validate_feature_report(buf, static_cast<std::ptrdiff_t>(len), 0x0A, 3)) return false;
   HidElement bat_elem;
   bat_elem.page = protocol::kPagePowerDevice;
   bat_elem.usage = protocol::kUsageVoltage;
@@ -114,9 +114,9 @@ bool decode_cp1500_report_07(const uint8_t* buf, std::size_t len, Readings& r, S
   // CP1500PFCLCDa Report 0x07 is 7 bytes (1 ID + 6 data bytes):
   // [1]=DesignCapacity(0x83), [2]=CapacityMode(0x8D), [3]=ManufacturerDate(0x8E),
   // [4]=FullChargeCapacity(0x8C), [5]=RemainingCapacityLimit(0x29), [6]=FullChargeCapacity(0x67).
-  // Note: None of these fields correspond to NeedReplacement (0x2B).
+  // Note: None of these fields correspond to NeedReplacement (0x4B).
   // Therefore Status::need_replacement is deliberately left unset.
-  if (!validate_feature_report(buf, static_cast<ssize_t>(len), 0x07, 7)) return false;
+  if (!validate_feature_report(buf, static_cast<std::ptrdiff_t>(len), 0x07, 7)) return false;
 
   // buf[3]: CycleCount / Date (0x8C / 0x8E depending on layout)
   if (buf[3] > 0) {
@@ -130,7 +130,7 @@ bool decode_cp1500_report_07(const uint8_t* buf, std::size_t len, Readings& r, S
 }
 
 bool decode_cp1500_report_02(const uint8_t* buf, std::size_t len, Readings& r, Status& s) {
-  if (!validate_feature_report(buf, static_cast<ssize_t>(len), 0x02, 2)) return false;
+  if (!validate_feature_report(buf, static_cast<std::ptrdiff_t>(len), 0x02, 2)) return false;
   // Sensitivity levels: 1 = High, 2 = Medium, 3 = Low
   if (buf[1] >= 1 && buf[1] <= 3) {
     HidElement sens_elem;

@@ -6,7 +6,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <sys/types.h>
 
 namespace cyberpower::platform {
 
@@ -15,7 +14,8 @@ namespace cyberpower::platform {
 bool is_verified_hid_profile(uint16_t vid, uint16_t pid);
 
 // Validates that a Feature report response has sufficient length and the expected report ID.
-bool validate_feature_report(const uint8_t* buf, ssize_t bytes_read,
+// Uses portable std::ptrdiff_t instead of POSIX ssize_t for cross-platform portability.
+bool validate_feature_report(const uint8_t* buf, std::ptrdiff_t bytes_read,
                              uint8_t expected_id, std::size_t min_len);
 
 // Decoding helpers for CP1500PFCLCDa (PID 0x0601).
