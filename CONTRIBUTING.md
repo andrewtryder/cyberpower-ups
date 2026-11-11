@@ -101,6 +101,16 @@ make check-format  # clang-format check on changed lines + regression test suite
 make lint          # actionlint and zizmor workflow audit
 ```
 
+### Running with Sanitizers (AddressSanitizer + UndefinedBehaviorSanitizer)
+To test for memory safety, out-of-bounds accesses, leaks, and undefined behavior locally:
+```bash
+cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCYBERPOWER_ENABLE_WARNINGS=ON -DCYBERPOWER_ENABLE_SANITIZERS=ON
+cmake --build build-asan
+ctest --test-dir build-asan --output-on-failure
+./build-asan/cpups --self-test
+```
+This is also run automatically on Linux in GitHub Actions CI.
+
 ---
 
 ## 6. Reporting Issues & Hardware Diagnostics
@@ -135,8 +145,9 @@ We welcome contributions of all kinds — from core code to documentation, tests
 
 ### Offline Testing & CI Safety
 - **No Physical Hardware Required for Contributions**: You do **not** need physical CyberPower hardware to contribute. Bug fixes, parser logic, build configurations, and documentation can all be validated with offline tests.
-- **Offline Protocol Regression Tests**: When fixing a protocol parsing bug or adding report handling, always add an offline unit test in [`tests/offline_test.cpp`](tests/offline_test.cpp) using hardcoded frame data or mock buffers.
+- **Offline Protocol Regression Tests**: When fixing a protocol parsing bug or adding report handling, always add an offline unit test in [`tests/offline_test.cpp`](tests/offline_test.cpp) using hardcoded frame data or mock buffers. The offline suite tests boundary conditions, corrupted checksums, truncated frames, extreme values, and HID feature decoding.
 - **No Hardware Actions in CI**: CI runs on GitHub-hosted public runners without attached UPS hardware. All tests in CI must execute completely offline without hardware side effects.
+- **Cross-Platform & Sanitizer Coverage**: CI validates clean builds and tests across Ubuntu (standard release + ASan/UBSan sanitizers), macOS, and Windows (portable parser tests and clean compilation with MSVC).
 
 ### Hardware Compatibility Claims
 - Claims of compatibility with specific UPS models must be backed by real physical verification or clearly qualified evidence (noting the exact hardware model, firmware version, and OS environment).

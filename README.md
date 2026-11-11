@@ -353,8 +353,8 @@ CI automatically enforces:
 | Platform | Support Status | Implementation Details |
 | :--- | :--- | :--- |
 | **macOS** | Supported (arm64 & x86_64) | Native IOKit HID (`IOHIDManager`) and POSIX `termios` serial |
-| **Linux** | Supported | Native `hidraw` (`/dev/hidraw*`) and POSIX `termios` serial |
-| **Windows** | Stub only | Platform stub is implemented, but successful compilation has not yet been established through CI |
+| **Linux** | Supported | Native `hidraw` (`/dev/hidraw*`) and POSIX `termios` serial; continuous CI coverage includes AddressSanitizer and UndefinedBehaviorSanitizer |
+| **Windows** | Stub only (CI verified) | Compiles cleanly with MSVC on `windows-latest` CI; offline parser self-tests and test fixtures execute portable logic |
 
 ### Hardware Validation & Model Support
 

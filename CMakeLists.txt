@@ -9,6 +9,22 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 option(CYBERPOWER_ENABLE_WARNINGS "Enable useful project compiler warnings" OFF)
+option(CYBERPOWER_ENABLE_SANITIZERS "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+
+if(CYBERPOWER_ENABLE_WARNINGS)
+  if(MSVC)
+    add_compile_options(/W4 /permissive-)
+  else()
+    add_compile_options(-Wall -Wextra -Wpedantic)
+  endif()
+endif()
+
+if(CYBERPOWER_ENABLE_SANITIZERS)
+  if(NOT MSVC)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+  endif()
+endif()
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -41,9 +57,6 @@ target_include_directories(cyberpower-ups
 )
 
 target_compile_features(cyberpower-ups PUBLIC cxx_std_17)
-if(CYBERPOWER_ENABLE_WARNINGS)
-  target_compile_options(cyberpower-ups PRIVATE -Wall -Wextra -Wpedantic)
-endif()
 
 set_target_properties(cyberpower-ups PROPERTIES
   VERSION ${PROJECT_VERSION}

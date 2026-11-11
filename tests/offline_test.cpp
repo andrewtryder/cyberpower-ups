@@ -1,12 +1,18 @@
 #include "cyberpower/protocol.hpp"
+#include "cyberpower/protocol_v3.hpp"
 #include "cyberpower/ups.hpp"
 #include "internal/device_helpers.hpp"
+#include "internal/hid_linux_decode.hpp"
+#include "internal/hid_mapping.hpp"
 #include "internal/parse_integer.hpp"
 #include "internal/serial_discovery.hpp"
 #include "internal/serial_write.hpp"
-#include "internal/hid_mapping.hpp"
-#include "internal/hid_linux_decode.hpp"
+
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
 #include "internal/serial_posix.hpp"
+#endif
 
 #include <chrono>
 #include <cmath>
@@ -15,8 +21,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
-#include <fcntl.h>
-#include <unistd.h>
+#include <vector>
 
 namespace {
 
@@ -99,6 +104,7 @@ bool test_pure_helpers() {
   return true;
 }
 
+#ifndef _WIN32
 bool test_nonblocking_write_timeout() {
   int pipefd[2] = {-1, -1};
   if (::pipe(pipefd) != 0) return fail("pipe setup");
@@ -120,6 +126,7 @@ bool test_nonblocking_write_timeout() {
   }
   return true;
 }
+#endif
 
 class MockTransport final : public cyberpower::platform::Transport {
  public:
@@ -390,6 +397,7 @@ bool test_safe_serial_discovery() {
   return true;
 }
 
+#ifndef _WIN32
 bool test_posix_termios_configuration() {
 #if defined(__unix__) || defined(__APPLE__)
   using namespace cyberpower::platform;
@@ -494,6 +502,7 @@ bool test_posix_termios_configuration() {
 #endif
   return true;
 }
+#endif
 
 bool test_hid_feature_validation_and_decoding() {
   using namespace cyberpower::platform;
@@ -665,6 +674,336 @@ bool test_unsupported_device_profile_and_controls() {
   return true;
 }
 
+bool test_expanded_hid_fixtures() {
+  using namespace cyberpower::platform;
+  using namespace cyberpower::protocol;
+
+  Readings r;
+  cyberpower::Status s;
+
+  using DecoderFn = bool (*)(const uint8_t*, std::size_t, Readings&, cyberpower::Status&);
+  struct DecoderSpec {
+    const char* name;
+    DecoderFn fn;
+    uint8_t report_id;
+    std::size_t min_len;
+  };
+
+  const DecoderSpec decoders[] = {
+      {"Report 0B", decode_cp1500_report_0b, 0x0B, 2},
+      {"Report 08", decode_cp1500_report_08, 0x08, 4},
+      {"Report 0F", decode_cp1500_report_0f, 0x0F, 3},
+      {"Report 12", decode_cp1500_report_12, 0x12, 3},
+      {"Report 13", decode_cp1500_report_13, 0x13, 2},
+      {"Report 0A", decode_cp1500_report_0a, 0x0A, 3},
+      {"Report 07", decode_cp1500_report_07, 0x07, 7},
+      {"Report 02", decode_cp1500_report_02, 0x02, 2},
+  };
+
+  for (const auto& dec : decoders) {
+    r = Readings{};
+    s = cyberpower::Status{};
+    // Nullptr buffer
+    if (dec.fn(nullptr, dec.min_len, r, s)) {
+      return fail(std::string(dec.name) + ": accepted nullptr buffer");
+    }
+    // Zero-length buffer
+    uint8_t valid_buf[16] = {};
+    valid_buf[0] = dec.report_id;
+    if (dec.fn(valid_buf, 0, r, s)) {
+      return fail(std::string(dec.name) + ": accepted zero-length buffer");
+    }
+    // Truncated buffer (min_len - 1)
+    if (dec.min_len > 1) {
+      if (dec.fn(valid_buf, dec.min_len - 1, r, s)) {
+        return fail(std::string(dec.name) + ": accepted truncated buffer");
+      }
+    }
+    // Wrong report ID
+    uint8_t wrong_id_buf[16] = {};
+    wrong_id_buf[0] = static_cast<uint8_t>(dec.report_id ^ 0xFF);
+    if (dec.fn(wrong_id_buf, dec.min_len, r, s)) {
+      return fail(std::string(dec.name) + ": accepted wrong report ID");
+    }
+  }
+
+  // Extreme battery %: 0%, 100% valid; 101%, 255% ignored
+  {
+    r = Readings{};
+    s = cyberpower::Status{};
+    const uint8_t rep_08_zero[4] = {0x08, 0, 0, 0};
+    if (!decode_cp1500_report_08(rep_08_zero, 4, r, s) || !r.remain || *r.remain != 0.0) {
+      return fail("report 0x08 0% capacity failed");
+    }
+    r = Readings{};
+    const uint8_t rep_08_100[4] = {0x08, 100, 0, 0};
+    if (!decode_cp1500_report_08(rep_08_100, 4, r, s) || !r.remain || *r.remain != 100.0) {
+      return fail("report 0x08 100% capacity failed");
+    }
+    for (uint8_t bad_pct : {101, 150, 200, 255}) {
+      r = Readings{};
+      const uint8_t rep_08_bad[4] = {0x08, bad_pct, 0, 0};
+      decode_cp1500_report_08(rep_08_bad, 4, r, s);
+      if (r.remain.has_value()) {
+        return fail("report 0x08 accepted out-of-range percent: " + std::to_string(bad_pct));
+      }
+    }
+  }
+
+  // Extreme load %: 0%, 100% valid; 101%, 255% ignored
+  {
+    r = Readings{};
+    s = cyberpower::Status{};
+    const uint8_t rep_13_zero[2] = {0x13, 0};
+    if (!decode_cp1500_report_13(rep_13_zero, 2, r, s) || !r.load || *r.load != 0.0) {
+      return fail("report 0x13 0% load failed");
+    }
+    r = Readings{};
+    const uint8_t rep_13_100[2] = {0x13, 100};
+    if (!decode_cp1500_report_13(rep_13_100, 2, r, s) || !r.load || *r.load != 100.0) {
+      return fail("report 0x13 100% load failed");
+    }
+    for (uint8_t bad_load : {101, 150, 200, 255}) {
+      r = Readings{};
+      const uint8_t rep_13_bad[2] = {0x13, bad_load};
+      decode_cp1500_report_13(rep_13_bad, 2, r, s);
+      if (r.load.has_value()) {
+        return fail("report 0x13 accepted out-of-range load: " + std::to_string(bad_load));
+      }
+    }
+  }
+
+  // Extreme sensitivity: 1, 2, 3 valid; 0, 4, 255 rejected
+  {
+    for (uint8_t val : {1, 2, 3}) {
+      r = Readings{};
+      s = cyberpower::Status{};
+      const uint8_t rep_02_val[2] = {0x02, val};
+      if (!decode_cp1500_report_02(rep_02_val, 2, r, s) || !r.sensitivity ||
+          *r.sensitivity != static_cast<double>(val)) {
+        return fail("report 0x02 valid sensitivity rejected: " + std::to_string(val));
+      }
+    }
+    for (uint8_t bad_val : {0, 4, 10, 255}) {
+      r = Readings{};
+      s = cyberpower::Status{};
+      const uint8_t rep_02_bad[2] = {0x02, bad_val};
+      if (decode_cp1500_report_02(rep_02_bad, 2, r, s)) {
+        return fail("report 0x02 accepted out-of-range sensitivity: " + std::to_string(bad_val));
+      }
+    }
+  }
+
+  // Extreme voltages: 0 V and 65535 V in 0F and 12
+  {
+    r = Readings{};
+    s = cyberpower::Status{};
+    const uint8_t rep_0f_zero[3] = {0x0F, 0x00, 0x00};
+    if (!decode_cp1500_report_0f(rep_0f_zero, 3, r, s) || !r.input_v || *r.input_v != 0.0) {
+      return fail("report 0x0F 0V failed");
+    }
+    r = Readings{};
+    const uint8_t rep_0f_max[3] = {0x0F, 0xFF, 0xFF};
+    if (!decode_cp1500_report_0f(rep_0f_max, 3, r, s) || !r.input_v || *r.input_v != 65535.0) {
+      return fail("report 0x0F 65535V failed");
+    }
+
+    r = Readings{};
+    const uint8_t rep_12_zero[3] = {0x12, 0x00, 0x00};
+    if (!decode_cp1500_report_12(rep_12_zero, 3, r, s) || !r.output_v || *r.output_v != 0.0) {
+      return fail("report 0x12 0V failed");
+    }
+    r = Readings{};
+    const uint8_t rep_12_max[3] = {0x12, 0xFF, 0xFF};
+    if (!decode_cp1500_report_12(rep_12_max, 3, r, s) || !r.output_v || *r.output_v != 65535.0) {
+      return fail("report 0x12 65535V failed");
+    }
+
+    r = Readings{};
+    const uint8_t rep_0a_zero[3] = {0x0A, 0x00, 0x00};
+    if (!decode_cp1500_report_0a(rep_0a_zero, 3, r, s) || !r.battery_v || *r.battery_v != 0.0) {
+      return fail("report 0x0A 0V failed");
+    }
+    r = Readings{};
+    const uint8_t rep_0a_max[3] = {0x0A, 0xFF, 0xFF};
+    if (!decode_cp1500_report_0a(rep_0a_max, 3, r, s) || !r.battery_v ||
+        !approx(*r.battery_v, 6553.5)) {
+      return fail("report 0x0A 6553.5V failed");
+    }
+  }
+
+  // Profile checks
+  if (!is_verified_hid_profile(0x0764, 0x0601)) return fail("profile 0764:0601 must be verified");
+  if (is_verified_hid_profile(0x0764, 0x0501))
+    return fail("profile 0764:0501 must not be verified");
+  if (is_verified_hid_profile(0x1234, 0x0601))
+    return fail("profile 1234:0601 must not be verified");
+  if (is_verified_hid_profile(0x0000, 0x0000))
+    return fail("profile 0000:0000 must not be verified");
+
+  return true;
+}
+
+bool test_serial_protocol_negative_paths() {
+  using cyberpower::Error;
+  using cyberpower::V3Status;
+  using namespace cyberpower::protocol;
+
+  // 1. Empty and truncated status frames
+  {
+    const auto res_empty = parse_v2e_status("", false);
+    if (res_empty.ok || res_empty.error != Error::RespEmpty) {
+      return fail("empty frame must return RespEmpty");
+    }
+
+    const auto res_no_hash = parse_v2e_status("I120.0O120.0\r", false);
+    if (res_no_hash.ok || res_no_hash.error != Error::RespFormatEssential) {
+      return fail("frame without hash must return RespFormatEssential");
+    }
+
+    const auto res_no_cr = parse_v2e_status("#I120.0O120.0", false);
+    if (res_no_cr.ok || res_no_cr.error != Error::RespFormatEssential) {
+      return fail("frame without CR must return RespFormatEssential");
+    }
+
+    const auto res_only_hash = parse_v2e_status("#", false);
+    if (res_only_hash.ok || res_only_hash.error != Error::RespFormatEssential) {
+      return fail("single hash must return RespFormatEssential");
+    }
+
+    const auto res_hash_cr = parse_v2e_status("#\r", false);
+    if (res_hash_cr.ok || res_hash_cr.error != Error::RespFormatEssential) {
+      return fail("short '#\\r' frame must return RespFormatEssential");
+    }
+  }
+
+  // 2. Malformed numeric fields
+  {
+    const char* bad_numbers[] = {
+        "#B\r",         "#I\r",    "#O\r",   "#L\r",   "#R\r",      "#F\r",
+        "#T\r",         "#H\r",    "#C\r",   "#B1.\r", "#B.1\r",    "#B999999999999999999999999\r",
+        "#B9999999k\r", "#Oabc\r", "#F++\r", "#T--\r", "#L10.0.0\r"};
+    for (const char* wire : bad_numbers) {
+      const auto res = parse_v2e_status(wire, false);
+      if (res.ok || res.error != Error::RespNotNumber) {
+        return fail(std::string("malformed numeric field accepted or wrong error: ") + wire);
+      }
+    }
+  }
+
+  // 3. Non-ASCII and binary data in frame
+  {
+    const char binary_chars[] = {'#', 'I', '1', '2', '0',  '\x80', '\xFF',
+                                 'O', '1', '2', '0', '\0', '\r'};
+    const std::string binary_frame(binary_chars, sizeof(binary_chars));
+    const auto res = parse_v2e_status(binary_frame, false);
+    if (res.ok) {
+      return fail("binary junk in frame accepted");
+    }
+  }
+
+  // 4. Large malformed inputs (4096 bytes)
+  {
+    const std::string huge_no_hash(4096, 'A');
+    const auto res_huge = parse_v2e_status(huge_no_hash, false);
+    if (res_huge.ok || res_huge.error != Error::RespFormatEssential) {
+      return fail("4096-byte input without hash accepted");
+    }
+
+    std::string huge_frame = "#";
+    huge_frame.append(4094, 'X');
+    huge_frame.push_back('\r');
+    const auto res_huge_frame = parse_v2e_status(huge_frame, false);
+    if (res_huge_frame.ok) {
+      return fail("4096-byte malformed frame unexpectedly succeeded");
+    }
+  }
+
+  // 5. V3 protocol packet negative cases
+  {
+    V3Packet pkt;
+    V3Status st = V3Status::Success;
+
+    if (decode_v3_chunk(nullptr, 10, pkt, st) || st != V3Status::PayloadFormatFail) {
+      return fail("decode_v3_chunk accepted nullptr");
+    }
+
+    uint8_t short_buf[2] = {0x00, 0x00};
+    if (decode_v3_chunk(short_buf, 2, pkt, st) || st != V3Status::PayloadFormatFail) {
+      return fail("decode_v3_chunk accepted len < 3");
+    }
+
+    uint8_t bit7_buf[4] = {0x82, 'A', 'B', 0};
+    bit7_buf[3] = crc8(bit7_buf, 3);
+    if (decode_v3_chunk(bit7_buf, 4, pkt, st) || st != V3Status::PayloadFormatFail) {
+      return fail("decode_v3_chunk accepted header with bit 7 set");
+    }
+
+    uint8_t len_mismatch_buf[4] = {0x05, 'A', 'B', 0};
+    len_mismatch_buf[3] = crc8(len_mismatch_buf, 3);
+    if (decode_v3_chunk(len_mismatch_buf, 4, pkt, st) || st != V3Status::PayloadFormatFail) {
+      return fail("decode_v3_chunk accepted header length mismatch");
+    }
+
+    const std::string valid_encoded = encode_v3_chunk("hello", true);
+    if (valid_encoded.empty()) return fail("encode_v3_chunk failed for valid payload");
+    std::vector<uint8_t> corrupted(valid_encoded.begin(), valid_encoded.end());
+    corrupted.back() ^= 0xFF;
+    if (decode_v3_chunk(corrupted.data(), corrupted.size(), pkt, st) ||
+        st != V3Status::ChecksumFail) {
+      return fail("decode_v3_chunk accepted corrupted checksum");
+    }
+
+    const std::string oversized(64, 'Z');
+    if (!encode_v3_chunk(oversized, false).empty()) {
+      return fail("encode_v3_chunk accepted payload > 63 bytes");
+    }
+  }
+
+  // 6. Strict integer parsing negative cases
+  {
+    int val = 0;
+    const char* bad_ints[] = {"",
+                              " ",
+                              "  ",
+                              "abc",
+                              "12a",
+                              "a12",
+                              "+",
+                              "-",
+                              "++1",
+                              "--1",
+                              " 123",
+                              "123 ",
+                              "12 34",
+                              "999999999999999999999",
+                              "-999999999999999999999"};
+    for (const char* s_val : bad_ints) {
+      if (cyberpower::internal::parse_int_strict(s_val, val)) {
+        return fail(std::string("parse_int_strict accepted invalid input: '") + s_val + "'");
+      }
+    }
+  }
+
+#ifndef _WIN32
+  // 7. Invalid POSIX baud rates
+  {
+    termios tio{};
+    std::string err;
+    for (int bad_baud : {0, -1, 500, 5000, 999999}) {
+      if (cyberpower::platform::configure_posix_termios(tio, bad_baud, err)) {
+        return fail("configure_posix_termios accepted invalid baud: " + std::to_string(bad_baud));
+      }
+      if (err.find("unsupported baud") == std::string::npos) {
+        return fail("expected 'unsupported baud' in error for baud: " + std::to_string(bad_baud));
+      }
+    }
+  }
+#endif
+
+  return true;
+}
+
 std::string fixture_path(const char* name) {
   // Prefer source-tree fixtures/ when CTest sets CPUPS_FIXTURES_DIR.
   if (const char* root = std::getenv("CPUPS_FIXTURES_DIR")) {
@@ -689,10 +1028,15 @@ int main() {
   if (!test_protocol_constants()) return 1;
   std::cout << "offline_test: protocol constants ok\n";
 
-  if (!test_malformed_numbers() || !test_pure_helpers() || !test_nonblocking_write_timeout() ||
+  if (!test_malformed_numbers() || !test_pure_helpers() ||
+#ifndef _WIN32
+      !test_nonblocking_write_timeout() || !test_posix_termios_configuration() ||
+#endif
       !test_toggle_buzzer() || !test_hid_mapping() || !test_safe_serial_discovery() ||
-      !test_posix_termios_configuration() || !test_hid_feature_validation_and_decoding() ||
-      !test_battery_replacement_handling() || !test_unsupported_device_profile_and_controls()) return 1;
+      !test_hid_feature_validation_and_decoding() || !test_expanded_hid_fixtures() ||
+      !test_serial_protocol_negative_paths() || !test_battery_replacement_handling() ||
+      !test_unsupported_device_profile_and_controls())
+    return 1;
   std::cout << "offline_test: regression helpers ok\n";
 
   // Always try the synthetic example shipped in-tree.
