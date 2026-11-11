@@ -27,6 +27,7 @@ add_library(cyberpower-ups
   src/serial_discovery.cpp
   src/serial_write.cpp
   src/parse_integer.cpp
+  src/hid_mapping.cpp
 )
 
 add_library(cyberpower-ups::cyberpower-ups ALIAS cyberpower-ups)
@@ -54,17 +55,20 @@ set_target_properties(cyberpower-ups PROPERTIES
 if(APPLE)
   target_sources(cyberpower-ups PRIVATE
     src/platform/macos/hid_macos.cpp
-    src/platform/macos/hid_mapping.cpp
     src/platform/macos/serial_macos.cpp
   )
   target_link_libraries(cyberpower-ups PUBLIC
     "-framework IOKit"
     "-framework CoreFoundation"
   )
+elseif(UNIX)
+  target_sources(cyberpower-ups PRIVATE
+    src/platform/linux/hid_linux.cpp
+    src/platform/linux/serial_linux.cpp
+  )
 elseif(WIN32)
   target_sources(cyberpower-ups PRIVATE src/platform/windows/transport_stub.cpp)
 else()
-  # Non-Apple Unix builds use the Windows stub until a Linux transport exists.
   target_sources(cyberpower-ups PRIVATE src/platform/windows/transport_stub.cpp)
 endif()
 

@@ -1,4 +1,4 @@
-#include "hid_mapping.hpp"
+#include "internal/hid_mapping.hpp"
 
 #include "cyberpower/protocol.hpp"
 
@@ -6,15 +6,6 @@
 
 namespace cyberpower::platform {
 namespace {
-
-bool ancestor_is(IOHIDElementRef element, uint32_t page, uint32_t usage) {
-  for (IOHIDElementRef parent = IOHIDElementGetParent(element); parent != nullptr;
-       parent = IOHIDElementGetParent(parent)) {
-    if (IOHIDElementGetUsagePage(parent) == page && IOHIDElementGetUsage(parent) == usage)
-      return true;
-  }
-  return false;
-}
 
 bool is_flag(double value) { return value == 0.0 || value == 1.0; }
 
@@ -24,17 +15,17 @@ bool is_flag(double value) { return value == 0.0 || value == 1.0; }
 //
 // CyberPower frequently maps status to Feature elements, so core fields are
 // deliberately not restricted to Input elements.
-const char* map_power_device(IOHIDElementRef element, uint32_t usage, double value, Readings& r,
+const char* map_power_device(const HidElement& element, uint32_t usage, double value, Readings& r,
                              Status& status) {
   switch (usage) {
     case 0x30:
-      if (ancestor_is(element, protocol::kPagePowerDevice, 0x1A)) {
+      if (element.ancestor_is(protocol::kPagePowerDevice, 0x1A)) {
         r.input_v = value; return "input_v";
       }
-      if (ancestor_is(element, protocol::kPagePowerDevice, 0x1C)) {
+      if (element.ancestor_is(protocol::kPagePowerDevice, 0x1C)) {
         r.output_v = value; return "output_v";
       }
-      if (ancestor_is(element, protocol::kPagePowerDevice, 0x12)) {
+      if (element.ancestor_is(protocol::kPagePowerDevice, 0x12)) {
         r.battery_v = value; return "battery_v";
       }
       if (r.loose_voltage == 0) {
@@ -58,7 +49,7 @@ const char* map_power_device(IOHIDElementRef element, uint32_t usage, double val
 }
 
 // Battery System page (0x85): RE-confirmed primary usages.
-const char* map_battery(IOHIDElementRef element, uint32_t usage, double value, Readings& r,
+const char* map_battery(const HidElement& element, uint32_t usage, double value, Readings& r,
                         Status& status) {
   switch (usage) {
     case protocol::kUsageRemainingCapacity:
@@ -77,9 +68,7 @@ const char* map_battery(IOHIDElementRef element, uint32_t usage, double value, R
       // from descriptor metadata rather than the live value: a capacity
       // element has a range beyond plausible Celsius values. This keeps the
       // later legacy mapping reachable without reclassifying all 0x67 data.
-      const int logical_min = static_cast<int>(IOHIDElementGetLogicalMin(element));
-      const int logical_max = static_cast<int>(IOHIDElementGetLogicalMax(element));
-      if (protocol::battery_usage_67_is_legacy_full_capacity(logical_min, logical_max)) {
+      if (protocol::battery_usage_67_is_legacy_full_capacity(element.logical_min, element.logical_max)) {
         if (!r.full) { r.full = value; return "full_cap(67_legacy)"; }
       } else if (!r.temp && value < 99.0) {
         r.temp = value; return "temp(67_new)";
@@ -92,13 +81,13 @@ const char* map_battery(IOHIDElementRef element, uint32_t usage, double value, R
       if (is_flag(value)) { r.need_replacement = value != 0.0; return "need_repl(29)"; }
       return nullptr;
     case protocol::kUsageCharging: {  // 0x68
-      const bool legacy_numeric = IOHIDElementGetLogicalMax(element) > 1;
+      const bool legacy_numeric = element.logical_max > 1;
       if (legacy_numeric) { r.runtime = value; return "runtime(68_legacy)"; }
       if (is_flag(value)) { status.charging = value != 0.0; return "charging(68)"; }
       return nullptr;
     }
     case protocol::kUsageDischarging: {  // 0x66
-      const bool legacy_numeric = IOHIDElementGetLogicalMax(element) > 1;
+      const bool legacy_numeric = element.logical_max > 1;
       if (legacy_numeric) { r.remain = value; return "remain(66_legacy)"; }
       if (is_flag(value)) { status.discharging = value != 0.0; return "discharging(66)"; }
       return nullptr;
@@ -142,21 +131,19 @@ const char* map_vendor_ff86(uint32_t usage, double value, Readings& r) {
 
 }  // namespace
 
-const char* element_type_label(IOHIDElementType type) {
+const char* element_type_label(HidElementType type) {
   switch (type) {
-    case kIOHIDElementTypeInput_Misc:
-    case kIOHIDElementTypeInput_Button:
-    case kIOHIDElementTypeInput_Axis:
-    case kIOHIDElementTypeInput_ScanCodes: return "In";
-    case kIOHIDElementTypeFeature: return "Feat";
-    case kIOHIDElementTypeOutput: return "Out";
-    default: return "Other";
+    case HidElementType::Input: return "In";
+    case HidElementType::Feature: return "Feat";
+    case HidElementType::Output: return "Out";
+    case HidElementType::Other: return "Other";
   }
+  return "Other";
 }
 
-const char* map_element(IOHIDElementRef element, double value, Readings& r, Status& status) {
-  const uint32_t page = IOHIDElementGetUsagePage(element);
-  const uint32_t usage = IOHIDElementGetUsage(element);
+const char* map_element(const HidElement& element, double value, Readings& r, Status& status) {
+  const uint32_t page = element.page;
+  const uint32_t usage = element.usage;
   if (page == protocol::kPagePowerDevice) return map_power_device(element, usage, value, r, status);
   if (page == protocol::kPageVendorFf86) return map_vendor_ff86(usage, value, r);
   if (page == protocol::kPageBattery) {

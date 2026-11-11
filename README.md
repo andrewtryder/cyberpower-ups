@@ -229,7 +229,8 @@ By default serial discovery only includes port-name patterns explicitly named by
 cyberpower-ups/
 ├── include/cyberpower/   # Public headers
 ├── src/
-│   ├── platform/macos/   # IOKit (hid_macos = device I/O, hid_mapping = usage mapping) + termios
+│   ├── platform/macos/   # IOKit (hid_macos) + termios (serial_macos)
+│   ├── platform/linux/   # hidraw (hid_linux) + termios (serial_linux)
 │   └── platform/windows/ # Stub / extension points for SetupAPI + COM
 ├── tools/                # cpups CLI (cpups.cpp, cpups_args, cpups_format)
 ├── tests/                # Offline CTest (no UPS required)

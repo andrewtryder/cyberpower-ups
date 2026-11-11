@@ -1,16 +1,43 @@
 #pragma once
 
-// Maps IOKit HID elements onto the library's Status fields. Split out of
-// hid_macos.cpp so the usage-mapping rules live apart from device I/O.
+// Maps USB HID elements onto the library's Status fields. Platform-independent
+// usage decoding logic shared across macOS, Linux, and offline test harnesses.
 
 #include "cyberpower/ups.hpp"
 
-#include <IOKit/hid/IOHIDLib.h>
-
+#include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace cyberpower::platform {
+
+enum class HidElementType {
+  Input,
+  Feature,
+  Output,
+  Other,
+};
+
+// Generic descriptor of a HID element needed for status decoding.
+struct HidElement {
+  uint32_t page = 0;
+  uint32_t usage = 0;
+  HidElementType type = HidElementType::Other;
+  int logical_min = 0;
+  int logical_max = 0;
+  uint32_t report_id = 0;
+  // Ancestor collections (page, usage) from innermost to outermost.
+  std::vector<std::pair<uint32_t, uint32_t>> ancestors;
+
+  bool ancestor_is(uint32_t p, uint32_t u) const {
+    for (const auto& a : ancestors) {
+      if (a.first == p && a.second == u) return true;
+    }
+    return false;
+  }
+};
 
 // Values gathered while walking the HID element tree. Unset optionals mean
 // "not exposed by this device".
@@ -24,12 +51,12 @@ struct Readings {
 };
 
 // Short label ("In", "Feat", "Out", "Other") for --dump-raw traces.
-const char* element_type_label(IOHIDElementType type);
+const char* element_type_label(HidElementType type);
 
 // Folds one element into `r` (or directly into `status` for boolean flags).
 // Returns a short label describing the mapping for --dump-raw, or nullptr when
 // the element was ignored.
-const char* map_element(IOHIDElementRef element, double value, Readings& r, Status& status);
+const char* map_element(const HidElement& element, double value, Readings& r, Status& status);
 
 // Converts the gathered readings into the public Status fields.
 void apply_readings(const Readings& r, Status& status);

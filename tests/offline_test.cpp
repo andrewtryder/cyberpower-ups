@@ -4,6 +4,7 @@
 #include "internal/parse_integer.hpp"
 #include "internal/serial_discovery.hpp"
 #include "internal/serial_write.hpp"
+#include "internal/hid_mapping.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -248,6 +249,91 @@ bool test_protocol_constants() {
   return true;
 }
 
+bool test_hid_mapping() {
+  using namespace cyberpower::platform;
+  using namespace cyberpower::protocol;
+  Readings r;
+  cyberpower::Status status;
+
+  // Voltage collection with parent Input (0x1A)
+  HidElement in_elem;
+  in_elem.page = kPagePowerDevice;
+  in_elem.usage = 0x30;
+  in_elem.ancestors = {{kPagePowerDevice, 0x1A}};
+  if (std::string(map_element(in_elem, 120.0, r, status)) != "input_v") return fail("hid map input_v");
+  if (!r.input_v || *r.input_v != 120.0) return fail("hid r.input_v");
+
+  // Output voltage with parent Output (0x1C)
+  HidElement out_elem;
+  out_elem.page = kPagePowerDevice;
+  out_elem.usage = 0x30;
+  out_elem.ancestors = {{kPagePowerDevice, 0x1C}};
+  if (std::string(map_element(out_elem, 119.5, r, status)) != "output_v") return fail("hid map output_v");
+  if (!r.output_v || *r.output_v != 119.5) return fail("hid r.output_v");
+
+  // Battery voltage with parent Battery (0x12)
+  HidElement bat_elem;
+  bat_elem.page = kPagePowerDevice;
+  bat_elem.usage = 0x30;
+  bat_elem.ancestors = {{kPagePowerDevice, 0x12}};
+  if (std::string(map_element(bat_elem, 27.2, r, status)) != "battery_v") return fail("hid map battery_v");
+  if (!r.battery_v || *r.battery_v != 27.2) return fail("hid r.battery_v");
+
+  // Load percent (modern 0x65)
+  HidElement load_elem;
+  load_elem.page = kPagePowerDevice;
+  load_elem.usage = kUsagePercentLoad;
+  if (std::string(map_element(load_elem, 15.0, r, status)) != "load(65_new)") return fail("hid map load");
+
+  // ACPresent (0xFD)
+  HidElement ac_elem;
+  ac_elem.page = kPagePowerDevice;
+  ac_elem.usage = kUsageACPresent;
+  if (std::string(map_element(ac_elem, 1.0, r, status)) != "ac_present") return fail("hid map ac_present");
+  if (!status.ac_present || !*status.ac_present) return fail("status.ac_present");
+
+  // Remaining capacity (0x2C)
+  HidElement rem_elem;
+  rem_elem.page = kPageBattery;
+  rem_elem.usage = kUsageRemainingCapacity;
+  if (std::string(map_element(rem_elem, 98.0, r, status)) != "remain(2C_new)") return fail("hid map remain");
+
+  // Runtime to empty (0x8B)
+  HidElement rt_elem;
+  rt_elem.page = kPageBattery;
+  rt_elem.usage = kUsageRunTimeToEmpty;
+  if (std::string(map_element(rt_elem, 3600.0, r, status)) != "runtime(8B_new)") return fail("hid map runtime");
+
+  // Vendor 0xFF86 config usages
+  HidElement sens_elem;
+  sens_elem.page = kPageVendorFf86;
+  sens_elem.usage = kUsageVendorSensitivityRead;
+  if (std::string(map_element(sens_elem, 2.0, r, status)) != "sensitivity(FF86)") return fail("hid map sens");
+
+  HidElement shut_elem;
+  shut_elem.page = kPageVendorFf86;
+  shut_elem.usage = kUsageVendorShutdownDelay;
+  if (std::string(map_element(shut_elem, 60.0, r, status)) != "shutdown_delay(FF86)") return fail("hid map shutdown");
+
+  HidElement rest_elem;
+  rest_elem.page = kPageVendorFf86;
+  rest_elem.usage = kUsageVendorRestoreDelay;
+  if (std::string(map_element(rest_elem, 30.0, r, status)) != "restore_delay(FF86)") return fail("hid map restore");
+
+  apply_readings(r, status);
+  if (!status.input_voltage_v || *status.input_voltage_v != 120.0) return fail("applied input_voltage_v");
+  if (!status.output_voltage_v || *status.output_voltage_v != 119.5) return fail("applied output_voltage_v");
+  if (!status.battery_voltage_v || *status.battery_voltage_v != 27.2) return fail("applied battery_voltage_v");
+  if (!status.load_percent || *status.load_percent != 15.0) return fail("applied load_percent");
+  if (!status.battery_percent || *status.battery_percent != 98.0) return fail("applied battery_percent");
+  if (!status.runtime_seconds || *status.runtime_seconds != 3600.0) return fail("applied runtime_seconds");
+  if (!status.voltage_sensitivity || *status.voltage_sensitivity != 2) return fail("applied voltage_sensitivity");
+  if (!status.shutdown_delay_s || *status.shutdown_delay_s != 60.0) return fail("applied shutdown_delay_s");
+  if (!status.restore_delay_s || *status.restore_delay_s != 30.0) return fail("applied restore_delay_s");
+
+  return true;
+}
+
 std::string fixture_path(const char* name) {
   // Prefer source-tree fixtures/ when CTest sets CPUPS_FIXTURES_DIR.
   if (const char* root = std::getenv("CPUPS_FIXTURES_DIR")) {
@@ -273,7 +359,7 @@ int main() {
   std::cout << "offline_test: protocol constants ok\n";
 
   if (!test_malformed_numbers() || !test_pure_helpers() || !test_nonblocking_write_timeout() ||
-      !test_toggle_buzzer()) return 1;
+      !test_toggle_buzzer() || !test_hid_mapping()) return 1;
   std::cout << "offline_test: regression helpers ok\n";
 
   // Always try the synthetic example shipped in-tree.
