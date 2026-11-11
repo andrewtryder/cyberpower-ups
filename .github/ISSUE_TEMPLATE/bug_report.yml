@@ -1,0 +1,66 @@
+name: Bug Report
+description: Report a reproducible defect, parsing error, or hardware communication issue
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please review [CONTRIBUTING.md](https://github.com/andrewtryder/cyberpower-ups/blob/main/CONTRIBUTING.md) and ensure all diagnostic logs are sanitized of serial numbers or identifying data before submitting.
+  - type: input
+    id: device_model
+    attributes:
+      label: UPS Device Model
+      description: Exact model name printed on the physical device label.
+      placeholder: e.g. CP1500PFCLCDa
+    validations:
+      required: true
+  - type: input
+    id: vid_pid
+    attributes:
+      label: USB VID / PID (if applicable)
+      description: Hexadecimal vendor and product IDs (e.g. from lsusb or system_profiler).
+      placeholder: e.g. 0764:0601
+  - type: input
+    id: platform
+    attributes:
+      label: Operating System & Architecture
+      description: e.g. Ubuntu 24.04 x86_64, macOS 14.5 arm64
+      placeholder: e.g. macOS 14.5 (Apple Silicon M2)
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport Type
+      options:
+        - USB HID
+        - Serial Port
+        - Both
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description of the Problem
+      description: A clear and concise description of the defect.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction Steps & CLI Command
+      description: Exact command line used (e.g. cpups --json, cpups --monitor) or library code snippet.
+      placeholder: |
+        1. Run `./build/cpups --json`
+        2. Observe error output...
+    validations:
+      required: true
+  - type: textarea
+    id: sanitized_logs
+    attributes:
+      label: Sanitized Output / Diagnostics
+      description: |
+        Paste output from `cpups --dump-raw` or `cpups --json`.
+        CRITICAL: Remove device serial numbers or private identifiers before pasting!
+      render: shell
+

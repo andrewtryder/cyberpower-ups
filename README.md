@@ -328,7 +328,7 @@ Capture real-device fixtures (optional; see [fixtures/README.md](fixtures/README
 
 ## Code Quality & Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for full development guidelines, PR title conventions, and CI quality checks.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for full development guidelines, issue templates, PR title conventions, and CI quality checks.
 
 Helpful Make targets:
 ```bash
@@ -346,9 +346,42 @@ CI automatically enforces:
 
 ---
 
-## Supported Models
+## Platform & Hardware Compatibility
 
-The original driver recognizes many CPS models (EI, PIE, PRO, OR, PR, OL, PP, and more). This library speaks the common **v2e `D` text protocol** on serial and **standard HID usages** on USB. Model-specific branches from the original driver are not all specialized here yet. HID alarm/test Feature writes are confirmed for PID `0x0601` (e.g. CP1500PFCLCDa); other product IDs resolve report IDs from the device descriptor when present.
+### Operating System Support
+
+| Platform | Support Status | Implementation Details |
+| :--- | :--- | :--- |
+| **macOS** | Supported (arm64 & x86_64) | Native IOKit HID (`IOHIDManager`) and POSIX `termios` serial |
+| **Linux** | Supported | Native `hidraw` (`/dev/hidraw*`) and POSIX `termios` serial |
+| **Windows** | Stub only | Platform stub is implemented, but successful compilation has not yet been established through CI |
+
+### Hardware Validation & Model Support
+
+The reverse-engineered protocol originates from PowerPanel Personal driver analysis (`libppbedrvc.dylib`). However, hardware capabilities, Feature report IDs, and report layouts vary significantly across CyberPower product families:
+
+- **Physically Validated Profile (Status Reading)**: The **CyberPower CP1500PFCLCDa** (USB VID `0x0764`, PID `0x0601`) has been physically validated on:
+  - **macOS 14+** (Apple Silicon native USB HID)
+  - **Ubuntu 24.04** (ARM64 under UTM VM via USB passthrough to `/dev/hidraw*`)
+  Physically confirmed functionality includes:
+  - Native Linux `hidraw` device discovery
+  - Reading the eight CP1500PFCLCDa-specific Feature reports
+  - Decoding core status fields: battery capacity (100%), line input/output voltages (121 V), load percentage (9%), remaining runtime (4375 s), AC presence, and charging/discharging states
+  - Full parity of core status readings between Linux and macOS
+- **Implemented but Not Physically Validated**:
+  - Linux HID alarm control writes (buzzer toggle, mute)
+  - Battery self-test initiation and cancellation commands
+  - Battery calibration and deep test operations
+  - Linux serial communication against an actual CyberPower serial UPS (serial transport is tested via offline pseudo-terminal emulation)
+- **Model Independence**: Support for other CyberPower UPS models **must not be inferred** merely from a matching vendor ID (`0x0764`). Other models may use different report IDs, alternative usage paths, or distinct serial baud/framing parameters.
+- **Defensive Operation**: Unsupported or unverified control operations (such as feature writes on unconfirmed PIDs or unverified report IDs) intentionally return `Error::NotSupported` or `Error::ReqParamOutOfRange` rather than issuing speculative control writes.
+
+---
+
+## Security & Governance
+
+- **Security Policy**: See [SECURITY.md](SECURITY.md) for supported versions, vulnerability reporting instructions via GitHub Private Vulnerability Reporting, and hardware safety considerations.
+- **Governance & Branch Protection**: See [docs/governance.md](docs/governance.md) for project maintenance policies, Dependabot automation, and recommended branch protection rules.
 
 ---
 
