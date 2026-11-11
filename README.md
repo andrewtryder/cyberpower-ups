@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/cyberpower-logo.png" alt="CyberPower UPS" width="600">
+</p>
+
 # cyberpower-ups
 
 A modern C++17 library and command-line tool for talking to CyberPower UPS devices over **USB HID** and **serial**.
