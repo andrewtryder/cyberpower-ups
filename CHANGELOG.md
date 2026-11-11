@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/andrewtryder/cyberpower-ups/compare/v0.7.0...v0.8.0) (2026-11-11)
+
+
+### Features
+
+* **linux:** add native HID and serial transports ([40fa241](https://github.com/andrewtryder/cyberpower-ups/commit/40fa241dfd9635c2bb2df184cebd608e708a8bf4))
+
+
+### Bug Fixes
+
+* **linux:** harden HID and serial transports ([#3](https://github.com/andrewtryder/cyberpower-ups/issues/3)) ([b146faf](https://github.com/andrewtryder/cyberpower-ups/commit/b146faf438f8bbf8166df944122e63407934305a))
+
 ## [0.7.0](https://github.com/andrewtryder/cyberpower-ups/releases/tag/v0.7.0) (2026-09-28)
 
 ### Highlights
