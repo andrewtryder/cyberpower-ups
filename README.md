@@ -326,6 +326,26 @@ Capture real-device fixtures (optional; see [fixtures/README.md](fixtures/README
 
 ---
 
+## Code Quality & Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for full development guidelines, PR title conventions, and CI quality checks.
+
+Helpful Make targets:
+```bash
+make test          # Run ctest and offline self-tests
+make check-format  # Check incremental C/C++ formatting with git-clang-format
+make format        # Format modified lines in working tree
+make lint          # Run actionlint and zizmor workflow scanner
+```
+
+CI automatically enforces:
+- Build and test passes on Ubuntu and macOS
+- Conventional Commits PR titles (`feat:`, `fix:`, `ci:`, etc.)
+- Incremental formatting on C/C++ changes (`clang-format`)
+- Workflow linting (`actionlint`) and GitHub Actions security scanning (`zizmor`)
+
+---
+
 ## Supported Models
 
 The original driver recognizes many CPS models (EI, PIE, PRO, OR, PR, OL, PP, and more). This library speaks the common **v2e `D` text protocol** on serial and **standard HID usages** on USB. Model-specific branches from the original driver are not all specialized here yet. HID alarm/test Feature writes are confirmed for PID `0x0601` (e.g. CP1500PFCLCDa); other product IDs resolve report IDs from the device descriptor when present.

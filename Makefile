@@ -14,7 +14,7 @@ ARGS       ?=
 CMAKE_FLAGS = -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) -DCMAKE_INSTALL_PREFIX=$(PREFIX)
 CPUPS       = $(BUILD_DIR)/cpups
 
-.PHONY: all build clean distclean test install run monitor json help
+.PHONY: all build clean distclean test install run monitor json format check-format lint help
 
 all: build
 
@@ -49,6 +49,17 @@ monitor: build
 
 json: build
 	$(CPUPS) --json $(ARGS)
+
+format:
+	git-clang-format origin/main
+
+check-format:
+	./scripts/check-format.sh origin/main
+	python3 tests/test_check_format.py
+
+lint:
+	actionlint
+	zizmor .
 
 help:
 	@echo "Targets:"

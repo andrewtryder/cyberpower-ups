@@ -5,12 +5,17 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   macos:
     name: macOS build + self-test
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCYBERPOWER_ENABLE_WARNINGS=ON -DCMAKE_INSTALL_PREFIX="$PWD/install-prefix"
@@ -40,9 +45,12 @@ jobs:
       - name: Downstream pkg-config consumer
         run: |
           export PKG_CONFIG_PATH="$PWD/install-prefix/lib/pkgconfig"
+          # shellcheck disable=SC2046
           c++ -std=c++17 tests/consumer-pkgconfig/main.cpp $(pkg-config --cflags --libs cyberpower-ups) -o consumer-pkgconfig
           ./consumer-pkgconfig
+          # shellcheck disable=SC2046
           cc -c tests/consumer-pkgconfig/main.c $(pkg-config --cflags cyberpower-ups) -o consumer-c-api.o
+          # shellcheck disable=SC2046
           c++ consumer-c-api.o $(pkg-config --libs cyberpower-ups) -o consumer-c-api
           ./consumer-c-api
 
@@ -50,10 +58,15 @@ jobs:
     name: Ubuntu build + self-test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install build tools
-        run: which cmake && which g++ || (sudo apt-get update && sudo apt-get install -y cmake g++)
+        run: |
+          if ! command -v cmake >/dev/null 2>&1 || ! command -v g++ >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y cmake g++
+          fi
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCYBERPOWER_ENABLE_WARNINGS=ON -DCMAKE_INSTALL_PREFIX="$PWD/install-prefix"
@@ -73,8 +86,11 @@ jobs:
           cmake -S tests/consumer-cmake -B consumer-cmake -DCMAKE_PREFIX_PATH="$PWD/install-prefix"
           cmake --build consumer-cmake
           export PKG_CONFIG_PATH="$PWD/install-prefix/lib/pkgconfig"
+          # shellcheck disable=SC2046
           c++ -std=c++17 tests/consumer-pkgconfig/main.cpp $(pkg-config --cflags --libs cyberpower-ups) -o consumer-pkgconfig
           ./consumer-pkgconfig
+          # shellcheck disable=SC2046
           cc -c tests/consumer-pkgconfig/main.c $(pkg-config --cflags cyberpower-ups) -o consumer-c-api.o
+          # shellcheck disable=SC2046
           c++ consumer-c-api.o $(pkg-config --libs cyberpower-ups) -o consumer-c-api
           ./consumer-c-api
