@@ -382,6 +382,7 @@ The reverse-engineered protocol originates from PowerPanel Personal driver analy
 
 - **Security Policy**: See [SECURITY.md](SECURITY.md) for supported versions, vulnerability reporting instructions via GitHub Private Vulnerability Reporting, and hardware safety considerations.
 - **Governance & Branch Protection**: See [docs/governance.md](docs/governance.md) for project maintenance policies, Dependabot automation, and recommended branch protection rules.
+- **Semantic Versioning & Releases**: See [docs/versioning.md](docs/versioning.md) for our pre-1.0 SemVer policy, API/ABI compatibility boundaries, and automated Release Please workflows.
 
 ---
 

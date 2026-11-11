@@ -162,3 +162,17 @@ We welcome contributions of all kinds — from core code to documentation, tests
   5. `Clang-format (incremental)`
   6. `Zizmor security audit`
 - Pull requests are squash-merged into `main` by the maintainer using a Conventional Commit squash title.
+
+---
+
+## 8. Release Automation & Versioning (Release Please)
+
+Releases and changelogs are managed via automated [Release Please](https://github.com/googleapis/release-please) workflows following [Semantic Versioning](docs/versioning.md):
+
+1. **Version Calculation**: Conventional Commit titles determine version increments (`fix:` -> patch, `feat:` -> minor, breaking changes during `0.x` -> minor).
+2. **Release PR Creation**: When release-worthy commits merge into `main`, Release Please automatically opens or updates a release PR (`chore(main): release X.Y.Z`) modifying `CMakeLists.txt`, `version.txt`, `.release-please-manifest.json`, and `CHANGELOG.md`.
+3. **Protected CI Checks**: Release PRs must pass the 6 required branch protection checks like any other PR.
+4. **Maintainer Review & Merge**: The maintainer reviews and squash-merges the release PR into `main`.
+5. **Release Publication**: Merging the release PR triggers tag creation (`vX.Y.Z`) and GitHub Release publication with formatted release notes.
+6. **Local Version Checks**: Run `python3 scripts/check-version-sync.py` or `make test` to verify version consistency across all managed files.
+7. **Troubleshooting & Recovery**: If release automation is halted (e.g. unconfigured `RELEASE_PLEASE_TOKEN` secret), configure the secret and trigger the `Release Please` workflow via `workflow_dispatch` on GitHub Actions. Release Please is idempotent and safely reconciles the release PR without manual tag manipulation.

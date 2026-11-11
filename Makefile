@@ -37,6 +37,8 @@ distclean:
 test: build
 	ctest --test-dir $(BUILD_DIR) --output-on-failure
 	$(CPUPS) --self-test
+	python3 scripts/check-version-sync.py
+	python3 tests/test_check_version_sync.py
 
 install: build
 	cmake --install $(BUILD_DIR) --prefix "$(PREFIX)" --config $(BUILD_TYPE)
@@ -51,7 +53,7 @@ json: build
 	$(CPUPS) --json $(ARGS)
 
 format:
-	git-clang-format origin/main
+	git-clang-format origin/main --extensions c,h,cpp,hpp -- include src tools examples tests
 
 check-format:
 	./scripts/check-format.sh origin/main

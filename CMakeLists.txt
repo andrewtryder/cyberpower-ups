@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(cyberpower-ups
-  VERSION 0.7.0
+  VERSION 0.7.0 # x-release-please-version
   DESCRIPTION "C++17 library and CLI for CyberPower UPS devices over USB HID and serial"
   LANGUAGES CXX
 )
@@ -121,6 +121,11 @@ if(BUILD_TESTING)
   set_tests_properties(offline_test PROPERTIES
     ENVIRONMENT "CPUPS_FIXTURES_DIR=${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
   )
+
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME version_sync COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-version-sync.py)
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------
