@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(cyberpower-ups
-  VERSION 0.7.0 # x-release-please-version
+  VERSION 0.8.0 # x-release-please-version
   DESCRIPTION "C++17 library and CLI for CyberPower UPS devices over USB HID and serial"
   LANGUAGES CXX
 )
