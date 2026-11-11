@@ -1,112 +1,29 @@
 #include "cyberpower/ups.h"
 
 #include "cyberpower/ups.hpp"
+#include "internal/c_api_internal.hpp"
 
-#include <atomic>
-#include <chrono>
 #include <cstdlib>
 #include <cstring>
-#include <optional>
 #include <new>
+#include <optional>
 #include <string>
-#include <thread>
+#include <utility>
 #include <vector>
-
-struct cp_ups_stop_token {
-  std::atomic<bool> requested{false};
-};
 
 namespace {
 
-char* dup_cstr(const std::string& text) {
-  char* out = static_cast<char*>(std::malloc(text.size() + 1));
-  if (out == nullptr) return nullptr;
-  std::memcpy(out, text.c_str(), text.size() + 1);
-  return out;
-}
+using cyberpower::capi::as_session;
+using cyberpower::capi::dup_cstr;
+using cyberpower::capi::fill_status;
+using cyberpower::capi::Session;
 
-void set_opt(int& has, double& dest, const std::optional<double>& value) {
-  if (value) {
-    has = 1;
-    dest = *value;
-  }
-}
-
-void fill_status(cp_status* out, const cyberpower::Status& status) {
-  std::memset(out, 0, sizeof *out);
-  out->ok = status.ok ? 1 : 0;
-  out->error = static_cast<int>(status.error);
-  out->message = dup_cstr(status.message);
-  out->transport = status.transport == cyberpower::TransportKind::Serial ? 1 : 0;
-  out->raw = dup_cstr(status.raw);
-  set_opt(out->has_battery_percent, out->battery_percent, status.battery_percent);
-  set_opt(out->has_input_voltage_v, out->input_voltage_v, status.input_voltage_v);
-  set_opt(out->has_output_voltage_v, out->output_voltage_v, status.output_voltage_v);
-  set_opt(out->has_load_percent, out->load_percent, status.load_percent);
-  set_opt(out->has_runtime_seconds, out->runtime_seconds, status.runtime_seconds);
-  set_opt(out->has_frequency_hz, out->frequency_hz, status.frequency_hz);
-  set_opt(out->has_temperature_c, out->temperature_c, status.temperature_c);
-  set_opt(out->has_battery_voltage_v, out->battery_voltage_v, status.battery_voltage_v);
-  if (status.ac_present) {
-    out->has_ac_present = 1;
-    out->ac_present = *status.ac_present ? 1 : 0;
-  }
-  if (status.charging) {
-    out->has_charging = 1;
-    out->charging = *status.charging ? 1 : 0;
-  }
-  if (status.discharging) {
-    out->has_discharging = 1;
-    out->discharging = *status.discharging ? 1 : 0;
-  }
-  if (status.firmware_version) {
-    out->firmware_version = dup_cstr(*status.firmware_version);
-  }
-  set_opt(out->has_cycle_count, out->cycle_count, status.cycle_count);
-  if (status.need_replacement) {
-    out->has_need_replacement = 1;
-    out->need_replacement = *status.need_replacement ? 1 : 0;
-  }
-  if (status.voltage_sensitivity) {
-    out->has_voltage_sensitivity = 1;
-    out->voltage_sensitivity = *status.voltage_sensitivity;
-  }
-  set_opt(out->has_shutdown_delay_s, out->shutdown_delay_s, status.shutdown_delay_s);
-  set_opt(out->has_restore_delay_s, out->restore_delay_s, status.restore_delay_s);
-}
-
-struct Session {
-  cyberpower::Ups ups;
-  explicit Session(cyberpower::Ups opened) : ups(std::move(opened)) {}
-};
-
-template <typename Stopped>
-void monitor_impl(cp_ups* ups, int interval_ms, int only_on_change, Stopped stopped,
-                  cp_ups_monitor_cb callback, void* user_data) {
-  if (ups == nullptr || callback == nullptr) return;
-  const auto interval = std::chrono::milliseconds(interval_ms > 0 ? interval_ms : 2000);
-  const bool filter = only_on_change != 0;
-  auto& device = reinterpret_cast<Session*>(ups)->ups;
-  std::optional<cyberpower::Status> previous;
-  while (!stopped()) {
-    const cyberpower::Status status = device.read_status();
-    const bool first = !previous.has_value();
-    const bool changed = first || cyberpower::status_changed(*previous, status);
-    if (!filter || changed) {
-      cp_status view{};
-      fill_status(&view, status);
-      callback(&view, changed ? 1 : 0, user_data);
-      cp_ups_status_free(&view);
-    }
-    previous = status;
-    auto remaining = interval;
-    constexpr auto kSlice = std::chrono::milliseconds(50);
-    while (remaining.count() > 0 && !stopped()) {
-      const auto step = remaining < kSlice ? remaining : kSlice;
-      std::this_thread::sleep_for(step);
-      remaining -= step;
-    }
-  }
+// Runs `op` against the wrapped device and returns its Error as an int.
+// A null handle maps to Error::Io.
+template <typename Op>
+int run_op(cp_ups* ups, Op op) {
+  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
+  return static_cast<int>(op(as_session(ups)->ups));
 }
 
 }  // namespace
@@ -116,17 +33,20 @@ extern "C" {
 cp_device_list cp_ups_list(void) {
   cp_device_list list{};
   const std::vector<cyberpower::DeviceInfo> found = cyberpower::list_devices();
+  if (found.empty()) return list;
+  list.items = static_cast<cp_device_info*>(std::calloc(found.size(), sizeof(cp_device_info)));
+  if (list.items == nullptr) return list;  // allocation failure: report an empty list
   list.count = static_cast<int>(found.size());
-  if (list.count == 0) return list;
-  list.items = static_cast<cp_device_info*>(std::calloc(static_cast<std::size_t>(list.count), sizeof(cp_device_info)));
-  for (int i = 0; i < list.count; ++i) {
-    list.items[i].transport = found[static_cast<std::size_t>(i)].transport == cyberpower::TransportKind::Serial ? 1 : 0;
-    list.items[i].path = dup_cstr(found[static_cast<std::size_t>(i)].path);
-    list.items[i].product = dup_cstr(found[static_cast<std::size_t>(i)].product);
-    list.items[i].serial_number = dup_cstr(found[static_cast<std::size_t>(i)].serial_number);
-    list.items[i].vendor_id = found[static_cast<std::size_t>(i)].vendor_id;
-    list.items[i].product_id = found[static_cast<std::size_t>(i)].product_id;
-    list.items[i].location_id = found[static_cast<std::size_t>(i)].location_id;
+  for (std::size_t i = 0; i < found.size(); ++i) {
+    const cyberpower::DeviceInfo& src = found[i];
+    cp_device_info& dst = list.items[i];
+    dst.transport = src.transport == cyberpower::TransportKind::Serial ? 1 : 0;
+    dst.path = dup_cstr(src.path);
+    dst.product = dup_cstr(src.product);
+    dst.serial_number = dup_cstr(src.serial_number);
+    dst.vendor_id = src.vendor_id;
+    dst.product_id = src.product_id;
+    dst.location_id = src.location_id;
   }
   return list;
 }
@@ -162,7 +82,7 @@ cp_ups* cp_ups_open(const cp_device_info* info, char** err_out) {
   return reinterpret_cast<cp_ups*>(new Session(std::move(*opened)));
 }
 
-void cp_ups_close(cp_ups* ups) { delete reinterpret_cast<Session*>(ups); }
+void cp_ups_close(cp_ups* ups) { delete as_session(ups); }
 
 void cp_ups_read_status(cp_ups* ups, cp_status* out) {
   if (out == nullptr) return;
@@ -172,7 +92,7 @@ void cp_ups_read_status(cp_ups* ups, cp_status* out) {
     out->message = dup_cstr("null device");
     return;
   }
-  fill_status(out, reinterpret_cast<Session*>(ups)->ups.read_status());
+  fill_status(out, as_session(ups)->ups.read_status());
 }
 
 void cp_ups_status_free(cp_status* status) {
@@ -186,107 +106,71 @@ void cp_ups_status_free(cp_status* status) {
 }
 
 int cp_ups_self_test(cp_ups* ups) {
-  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
-  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.self_test());
+  return run_op(ups, [](cyberpower::Ups& u) { return u.self_test(); });
 }
 
 int cp_ups_cancel_test(cp_ups* ups) {
-  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
-  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.cancel_test());
+  return run_op(ups, [](cyberpower::Ups& u) { return u.cancel_test(); });
 }
 
 int cp_ups_toggle_buzzer(cp_ups* ups) {
-  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
-  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.toggle_buzzer());
+  return run_op(ups, [](cyberpower::Ups& u) { return u.toggle_buzzer(); });
 }
 
 int cp_ups_enable_alarm(cp_ups* ups) {
-  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
-  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.enable_alarm());
+  return run_op(ups, [](cyberpower::Ups& u) { return u.enable_alarm(); });
 }
 
 int cp_ups_disable_alarm(cp_ups* ups) {
-  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
-  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.disable_alarm());
+  return run_op(ups, [](cyberpower::Ups& u) { return u.disable_alarm(); });
 }
 
 int cp_ups_mute_alarm(cp_ups* ups) {
-  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
-  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.mute_alarm());
+  return run_op(ups, [](cyberpower::Ups& u) { return u.mute_alarm(); });
 }
 
 int cp_ups_read_rating(cp_ups* ups, char** rating_out) {
   if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
   std::string reply;
-  const cyberpower::Error error = reinterpret_cast<Session*>(ups)->ups.read_rating(reply);
+  const cyberpower::Error error = as_session(ups)->ups.read_rating(reply);
   if (rating_out) *rating_out = dup_cstr(reply);
   return static_cast<int>(error);
 }
 
 int cp_ups_cancel_schedule(cp_ups* ups) {
-  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
-  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.cancel_schedule());
+  return run_op(ups, [](cyberpower::Ups& u) { return u.cancel_schedule(); });
 }
 
 int cp_ups_calibrate(cp_ups* ups) {
-  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
-  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.calibrate());
+  return run_op(ups, [](cyberpower::Ups& u) { return u.calibrate(); });
 }
 
 int cp_ups_indicator_test(cp_ups* ups) {
-  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
-  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.indicator_test());
+  return run_op(ups, [](cyberpower::Ups& u) { return u.indicator_test(); });
 }
 
 int cp_ups_buzzer_test(cp_ups* ups) {
-  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
-  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.buzzer_test());
+  return run_op(ups, [](cyberpower::Ups& u) { return u.buzzer_test(); });
 }
 
 int cp_ups_set_voltage_sensitivity(cp_ups* ups, int level) {
-  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
-  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.set_voltage_sensitivity(level));
+  return run_op(ups, [level](cyberpower::Ups& u) { return u.set_voltage_sensitivity(level); });
 }
 
 int cp_ups_set_shutdown_delay(cp_ups* ups, int seconds) {
-  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
-  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.set_shutdown_delay(seconds));
+  return run_op(ups, [seconds](cyberpower::Ups& u) { return u.set_shutdown_delay(seconds); });
 }
 
 int cp_ups_set_restore_delay(cp_ups* ups, int seconds) {
-  if (ups == nullptr) return static_cast<int>(cyberpower::Error::Io);
-  return static_cast<int>(reinterpret_cast<Session*>(ups)->ups.set_restore_delay(seconds));
+  return run_op(ups, [seconds](cyberpower::Ups& u) { return u.set_restore_delay(seconds); });
 }
 
 int cp_ups_transact(cp_ups* ups, const char* command, char** response) {
   if (ups == nullptr || command == nullptr) return static_cast<int>(cyberpower::Error::Io);
   std::string reply;
-  const cyberpower::Error error = reinterpret_cast<Session*>(ups)->ups.transact(command, reply);
+  const cyberpower::Error error = as_session(ups)->ups.transact(command, reply);
   if (response) *response = dup_cstr(reply);
   return static_cast<int>(error);
-}
-
-void cp_ups_monitor(cp_ups* ups,
-                    int interval_ms,
-                    int only_on_change,
-                    volatile sig_atomic_t* stop_flag,
-                    cp_ups_monitor_cb callback,
-                    void* user_data) {
-  if (stop_flag == nullptr) return;
-  monitor_impl(ups, interval_ms, only_on_change, [stop_flag] { return *stop_flag != 0; }, callback, user_data);
-}
-
-cp_ups_stop_token* cp_ups_stop_token_create(void) { return new (std::nothrow) cp_ups_stop_token; }
-void cp_ups_stop_token_request(cp_ups_stop_token* token) {
-  if (token != nullptr) token->requested.store(true, std::memory_order_release);
-}
-void cp_ups_stop_token_destroy(cp_ups_stop_token* token) { delete token; }
-void cp_ups_monitor_with_stop_token(cp_ups* ups, int interval_ms, int only_on_change,
-                                    const cp_ups_stop_token* token, cp_ups_monitor_cb callback,
-                                    void* user_data) {
-  if (token == nullptr) return;
-  monitor_impl(ups, interval_ms, only_on_change,
-               [token] { return token->requested.load(std::memory_order_acquire); }, callback, user_data);
 }
 
 }  // extern "C"

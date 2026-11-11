@@ -16,9 +16,13 @@ include(CMakePackageConfigHelpers)
 add_library(cyberpower-ups
   src/errors.cpp
   src/protocol.cpp
+  src/protocol_text.cpp
+  src/protocol_v3.cpp
   src/driver.cpp
   src/device.cpp
   src/c_api.cpp
+  src/c_api_status.cpp
+  src/c_api_monitor.cpp
   src/raw_dump.cpp
   src/serial_discovery.cpp
   src/serial_write.cpp
@@ -50,6 +54,7 @@ set_target_properties(cyberpower-ups PROPERTIES
 if(APPLE)
   target_sources(cyberpower-ups PRIVATE
     src/platform/macos/hid_macos.cpp
+    src/platform/macos/hid_mapping.cpp
     src/platform/macos/serial_macos.cpp
   )
   target_link_libraries(cyberpower-ups PUBLIC
@@ -69,7 +74,7 @@ else()
   set(PC_PLATFORM_LIBS "")
 endif()
 
-add_executable(cpups tools/cpups.cpp)
+add_executable(cpups tools/cpups.cpp tools/cpups_args.cpp tools/cpups_format.cpp)
 target_link_libraries(cpups PRIVATE cyberpower-ups)
 target_include_directories(cpups PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
