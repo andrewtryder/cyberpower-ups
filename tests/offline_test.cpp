@@ -5,6 +5,8 @@
 #include "internal/serial_discovery.hpp"
 #include "internal/serial_write.hpp"
 #include "internal/hid_mapping.hpp"
+#include "internal/hid_linux_decode.hpp"
+#include "internal/serial_posix.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -334,6 +336,285 @@ bool test_hid_mapping() {
   return true;
 }
 
+bool test_safe_serial_discovery() {
+  using cyberpower::platform::serial_port_name_is_candidate;
+
+  // 1. Driver-named devices must ALWAYS be accepted (even without include_generic).
+  if (!serial_port_name_is_candidate("cu.wchusbserial42", false) ||
+      !serial_port_name_is_candidate("/dev/cu.wchusbserial1410", false) ||
+      !serial_port_name_is_candidate("wchusbserial0", false)) {
+    return fail("driver-named serial ports must be accepted by default");
+  }
+
+  // 2. Generic Linux ports (ttyS*, ttyUSB*, ttyACM*) MUST be rejected by default!
+  const char* generic_linux[] = {
+      "ttyS0", "ttyS1", "ttyS31", "/dev/ttyS0",
+      "ttyUSB0", "ttyUSB1", "/dev/ttyUSB0",
+      "ttyACM0", "ttyACM1", "/dev/ttyACM0"
+  };
+  for (const char* name : generic_linux) {
+    if (serial_port_name_is_candidate(name, false)) {
+      return fail(std::string("generic Linux port ") + name + " must be rejected without opt-in");
+    }
+    if (!serial_port_name_is_candidate(name, true)) {
+      return fail(std::string("generic Linux port ") + name + " must be accepted with opt-in");
+    }
+  }
+
+  // 3. Generic macOS ports (cu.usbserial*, cu.usbmodem*, cu.SLAB*) rejected by default, accepted with opt-in.
+  const char* generic_mac[] = {
+      "cu.usbserial-1420", "/dev/cu.usbserial-1420",
+      "cu.usbmodem1430", "/dev/cu.usbmodem1430",
+      "cu.SLAB_USBtoUART", "/dev/cu.SLAB_USBtoUART"
+  };
+  for (const char* name : generic_mac) {
+    if (serial_port_name_is_candidate(name, false)) {
+      return fail(std::string("generic macOS port ") + name + " must be rejected without opt-in");
+    }
+    if (!serial_port_name_is_candidate(name, true)) {
+      return fail(std::string("generic macOS port ") + name + " must be accepted with opt-in");
+    }
+  }
+
+  // 4. Completely unrelated devices must be rejected in all cases.
+  const char* unrelated[] = {"random_device", "null", "zero", "tty", "console", "ptmx"};
+  for (const char* name : unrelated) {
+    if (serial_port_name_is_candidate(name, false) || serial_port_name_is_candidate(name, true)) {
+      return fail(std::string("unrelated device ") + name + " must never be accepted");
+    }
+  }
+
+  return true;
+}
+
+bool test_posix_termios_configuration() {
+#if defined(__unix__) || defined(__APPLE__)
+  using namespace cyberpower::platform;
+
+  termios tio{};
+  std::string err;
+
+  // Invalid baud rejected
+  if (configure_posix_termios(tio, 5000, err)) {
+    return fail("unsupported baud accepted");
+  }
+  if (err.find("unsupported baud") == std::string::npos) {
+    return fail("unexpected error message for invalid baud");
+  }
+
+  // Valid default baud 2400
+  if (!configure_posix_termios(tio, 2400, err)) {
+    return fail("configure_posix_termios failed: " + err);
+  }
+
+  // Verify POSIX flags
+  if ((tio.c_cflag & CSIZE) != CS8) return fail("termios: not 8 data bits");
+  if (tio.c_cflag & PARENB) return fail("termios: parity enabled");
+  if (tio.c_cflag & CSTOPB) return fail("termios: two stop bits instead of one");
+  if ((tio.c_cflag & (CLOCAL | CREAD)) != (CLOCAL | CREAD)) return fail("termios: CLOCAL/CREAD missing");
+  if (tio.c_cc[VMIN] != 0 || tio.c_cc[VTIME] != 0) return fail("termios: nonblocking VMIN/VTIME not zero");
+  if (cfgetispeed(&tio) != B2400 || cfgetospeed(&tio) != B2400) return fail("termios: baud not 2400");
+
+  // Pseudo-terminal test: verify applying settings and round-trip communication
+  const int master_fd = ::posix_openpt(O_RDWR | O_NOCTTY);
+  if (master_fd >= 0) {
+    if (::grantpt(master_fd) == 0 && ::unlockpt(master_fd) == 0) {
+      char* slave_name = ::ptsname(master_fd);
+      if (slave_name != nullptr) {
+        const int slave_fd = ::open(slave_name, O_RDWR | O_NOCTTY | O_NONBLOCK);
+        if (slave_fd >= 0) {
+          termios slave_tio{};
+          if (::tcgetattr(slave_fd, &slave_tio) == 0) {
+            if (configure_posix_termios(slave_tio, 2400, err)) {
+              if (::tcsetattr(slave_fd, TCSANOW, &slave_tio) == 0) {
+                termios verified{};
+                if (::tcgetattr(slave_fd, &verified) == 0) {
+                  if ((verified.c_cflag & CSIZE) != CS8 || (verified.c_cflag & PARENB) ||
+                      (verified.c_cflag & CSTOPB)) {
+                    ::close(slave_fd);
+                    ::close(master_fd);
+                    return fail("pty slave termios flags mismatch");
+                  }
+                }
+                // Test basic data transmission through PTY pair
+                const char tx_buf[] = "D\r";
+                if (::write(slave_fd, tx_buf, sizeof(tx_buf) - 1) == sizeof(tx_buf) - 1) {
+                  char rx_buf[16]{};
+                  if (::read(master_fd, rx_buf, sizeof(rx_buf)) > 0) {
+                    if (rx_buf[0] != 'D' || rx_buf[1] != '\r') {
+                      ::close(slave_fd);
+                      ::close(master_fd);
+                      return fail("pty data mismatch");
+                    }
+                  }
+                }
+              }
+            }
+          }
+          ::close(slave_fd);
+        }
+      }
+    }
+    ::close(master_fd);
+  }
+#endif
+  return true;
+}
+
+bool test_hid_feature_validation_and_decoding() {
+  using namespace cyberpower::platform;
+
+  // Header validation
+  uint8_t dummy[4] = {0x0B, 0x01, 0, 0};
+  if (validate_feature_report(nullptr, 4, 0x0B, 2)) return fail("null buffer accepted");
+  if (validate_feature_report(dummy, 1, 0x0B, 2)) return fail("truncated buffer accepted");
+  if (validate_feature_report(dummy, 4, 0x0C, 2)) return fail("mismatched report ID accepted");
+  if (!validate_feature_report(dummy, 2, 0x0B, 2)) return fail("valid feature report rejected");
+
+  // Report 0x0B decoding
+  Readings r;
+  cyberpower::Status s;
+  const uint8_t rep_0b_valid[2] = {0x0B, 0x01}; // AC present
+  if (!decode_cp1500_report_0b(rep_0b_valid, 2, r, s)) return fail("decode report 0x0B valid");
+  if (!s.ac_present || *s.ac_present != true) return fail("report 0x0B ac_present");
+  if (s.charging && *s.charging != false) return fail("report 0x0B charging false");
+
+  const uint8_t rep_0b_chg[2] = {0x0B, 0x07}; // AC + Chg + Dischg
+  if (!decode_cp1500_report_0b(rep_0b_chg, 2, r, s)) return fail("decode report 0x0B chg");
+  if (!s.charging || *s.charging != true) return fail("report 0x0B charging true");
+  if (!s.discharging || *s.discharging != true) return fail("report 0x0B discharging true");
+
+  const uint8_t rep_0b_trunc[1] = {0x0B};
+  if (decode_cp1500_report_0b(rep_0b_trunc, 1, r, s)) return fail("truncated 0x0B accepted");
+
+  // Report 0x08 decoding (battery % + runtime seconds)
+  const uint8_t rep_08_valid[4] = {0x08, 100, 0x47, 0x11}; // 100%, 0x1147 = 4423 s
+  if (!decode_cp1500_report_08(rep_08_valid, 4, r, s)) return fail("decode report 0x08 valid");
+  if (!r.remain || *r.remain != 100.0) return fail("report 0x08 remain");
+  if (!r.runtime || *r.runtime != 4423.0) return fail("report 0x08 runtime");
+
+  // Out-of-range battery % (> 100) ignored
+  r.remain.reset();
+  const uint8_t rep_08_invalid_pct[4] = {0x08, 150, 0x47, 0x11};
+  decode_cp1500_report_08(rep_08_invalid_pct, 4, r, s);
+  if (r.remain.has_value()) return fail("report 0x08 invalid percent accepted");
+
+  // Report 0x0F (input voltage)
+  const uint8_t rep_0f_valid[3] = {0x0F, 121, 0}; // 121 V
+  if (!decode_cp1500_report_0f(rep_0f_valid, 3, r, s)) return fail("decode report 0x0F valid");
+  if (!r.input_v || *r.input_v != 121.0) return fail("report 0x0F input_v");
+
+  // Report 0x12 (output voltage)
+  const uint8_t rep_12_valid[3] = {0x12, 120, 0}; // 120 V
+  if (!decode_cp1500_report_12(rep_12_valid, 3, r, s)) return fail("decode report 0x12 valid");
+  if (!r.output_v || *r.output_v != 120.0) return fail("report 0x12 output_v");
+
+  // Report 0x13 (load %)
+  const uint8_t rep_13_valid[2] = {0x13, 9}; // 9%
+  if (!decode_cp1500_report_13(rep_13_valid, 2, r, s)) return fail("decode report 0x13 valid");
+  if (!r.load || *r.load != 9.0) return fail("report 0x13 load");
+
+  // Report 0x0A (battery voltage in tenths)
+  const uint8_t rep_0a_valid[3] = {0x0A, 20, 1}; // 276 tenths = 27.6 V
+  if (!decode_cp1500_report_0a(rep_0a_valid, 3, r, s)) return fail("decode report 0x0A valid");
+  if (!r.battery_v || !approx(*r.battery_v, 27.6)) return fail("report 0x0A battery_v");
+
+  // Report 0x02 (sensitivity: 1..3)
+  const uint8_t rep_02_valid[2] = {0x02, 2}; // Medium
+  if (!decode_cp1500_report_02(rep_02_valid, 2, r, s)) return fail("decode report 0x02 valid");
+  if (!r.sensitivity || *r.sensitivity != 2.0) return fail("report 0x02 sensitivity");
+
+  const uint8_t rep_02_invalid[2] = {0x02, 5};
+  if (decode_cp1500_report_02(rep_02_invalid, 2, r, s)) return fail("report 0x02 invalid accepted");
+
+  return true;
+}
+
+bool test_battery_replacement_handling() {
+  using namespace cyberpower::platform;
+
+  Readings r;
+  cyberpower::Status s;
+
+  // Real hardware payload from CP1500PFCLCDa Report 0x07:
+  // [0]=0x07, [1]=100, [2]=5, [3]=10, [4]=20, [5]=10, [6]=100
+  const uint8_t rep_07_real[7] = {0x07, 0x64, 0x05, 0x0A, 0x14, 0x0A, 0x64};
+  if (!decode_cp1500_report_07(rep_07_real, 7, r, s)) return fail("decode report 0x07");
+
+  // Crucial check: need_replacement must NOT be set!
+  apply_readings(r, s);
+  if (s.need_replacement.has_value()) {
+    return fail("report 0x07 must not assert need_replacement");
+  }
+  if (!s.cycle_count || *s.cycle_count != 10) {
+    return fail("report 0x07 cycle count not mapped");
+  }
+
+  // Shared mapping tests for kUsageNeedReplacementStd (0x2B)
+  r = Readings{};
+  s = cyberpower::Status{};
+  HidElement repl_elem;
+  repl_elem.page = cyberpower::protocol::kPageBattery;
+  repl_elem.usage = cyberpower::protocol::kUsageNeedReplacementStd; // 0x2B
+
+  map_element(repl_elem, 1.0, r, s);
+  apply_readings(r, s);
+  if (!s.need_replacement || *s.need_replacement != true) {
+    return fail("kUsageNeedReplacementStd 1.0 must set need_replacement true");
+  }
+
+  r = Readings{};
+  s = cyberpower::Status{};
+  map_element(repl_elem, 0.0, r, s);
+  apply_readings(r, s);
+  if (!s.need_replacement || *s.need_replacement != false) {
+    return fail("kUsageNeedReplacementStd 0.0 must set need_replacement false");
+  }
+
+  r = Readings{};
+  s = cyberpower::Status{};
+  map_element(repl_elem, 20.0, r, s); // non-flag value
+  apply_readings(r, s);
+  if (s.need_replacement.has_value()) {
+    return fail("kUsageNeedReplacementStd non-flag must not set need_replacement");
+  }
+
+  // 0x29 with non-flag threshold (e.g. 10.0 or 20.0) must not set need_replacement
+  r = Readings{};
+  s = cyberpower::Status{};
+  HidElement cap_limit_elem;
+  cap_limit_elem.page = cyberpower::protocol::kPageBattery;
+  cap_limit_elem.usage = cyberpower::protocol::kUsageNeedReplacement; // 0x29
+  map_element(cap_limit_elem, 10.0, r, s);
+  apply_readings(r, s);
+  if (s.need_replacement.has_value()) {
+    return fail("kUsageNeedReplacement numeric threshold must not set need_replacement");
+  }
+
+  return true;
+}
+
+bool test_unsupported_device_profile_and_controls() {
+  using namespace cyberpower::platform;
+
+  // Profile validation
+  if (!is_verified_hid_profile(0x0764, 0x0601)) return fail("CP1500 profile must be verified");
+  if (is_verified_hid_profile(0x0764, 0x0501)) return fail("unverified PID 0x0501 must be false");
+  if (is_verified_hid_profile(0x1234, 0x0601)) return fail("unverified VID must be false");
+
+  // Control value range validation
+  for (int v : {1, 2, 3}) {
+    if (!is_valid_cp1500_alarm_control(v)) return fail("valid alarm control rejected: " + std::to_string(v));
+    if (!is_valid_cp1500_test_mode(v)) return fail("valid test mode rejected: " + std::to_string(v));
+  }
+  for (int v : {-1, 0, 4, 10, 99}) {
+    if (is_valid_cp1500_alarm_control(v)) return fail("invalid alarm control accepted: " + std::to_string(v));
+    if (is_valid_cp1500_test_mode(v)) return fail("invalid test mode accepted: " + std::to_string(v));
+  }
+
+  return true;
+}
+
 std::string fixture_path(const char* name) {
   // Prefer source-tree fixtures/ when CTest sets CPUPS_FIXTURES_DIR.
   if (const char* root = std::getenv("CPUPS_FIXTURES_DIR")) {
@@ -359,7 +640,9 @@ int main() {
   std::cout << "offline_test: protocol constants ok\n";
 
   if (!test_malformed_numbers() || !test_pure_helpers() || !test_nonblocking_write_timeout() ||
-      !test_toggle_buzzer() || !test_hid_mapping()) return 1;
+      !test_toggle_buzzer() || !test_hid_mapping() || !test_safe_serial_discovery() ||
+      !test_posix_termios_configuration() || !test_hid_feature_validation_and_decoding() ||
+      !test_battery_replacement_handling() || !test_unsupported_device_profile_and_controls()) return 1;
   std::cout << "offline_test: regression helpers ok\n";
 
   // Always try the synthetic example shipped in-tree.

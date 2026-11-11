@@ -28,6 +28,7 @@ add_library(cyberpower-ups
   src/serial_write.cpp
   src/parse_integer.cpp
   src/hid_mapping.cpp
+  src/hid_linux_decode.cpp
 )
 
 add_library(cyberpower-ups::cyberpower-ups ALIAS cyberpower-ups)
@@ -52,6 +53,10 @@ set_target_properties(cyberpower-ups PROPERTIES
   OUTPUT_NAME cyberpower-ups
 )
 
+if(UNIX)
+  target_sources(cyberpower-ups PRIVATE src/serial_posix.cpp)
+endif()
+
 if(APPLE)
   target_sources(cyberpower-ups PRIVATE
     src/platform/macos/hid_macos.cpp
@@ -61,7 +66,7 @@ if(APPLE)
     "-framework IOKit"
     "-framework CoreFoundation"
   )
-elseif(UNIX)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_sources(cyberpower-ups PRIVATE
     src/platform/linux/hid_linux.cpp
     src/platform/linux/serial_linux.cpp
@@ -74,6 +79,8 @@ endif()
 
 if(APPLE)
   set(PC_PLATFORM_LIBS "-framework IOKit -framework CoreFoundation")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(PC_PLATFORM_LIBS "-lstdc++")
 else()
   set(PC_PLATFORM_LIBS "")
 endif()
@@ -154,3 +161,9 @@ configure_file(
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/cyberpower-ups.pc
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
 )
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/udev/99-cyberpower-ups.rules
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/udev/rules.d
+  )
+endif()

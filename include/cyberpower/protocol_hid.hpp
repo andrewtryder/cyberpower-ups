@@ -59,6 +59,7 @@ constexpr int kTestAbort = 3;
 constexpr uint8_t kPid0601AlarmReportId = 0x0C;
 constexpr uint8_t kPid0601TestReportId = 0x14;
 constexpr uint16_t kPidCp1500Pfclcda = 0x0601;
+constexpr uint16_t kPid0601 = 0x0601;
 
 // ---------------------------------------------------------------------------
 // Battery System (0x85) usages recovered from UsageMapping::Initialize. High.
@@ -70,7 +71,9 @@ constexpr uint16_t kUsageFullChargeCapacity   = 0x008D;  // FullChargeCapacity
 constexpr uint16_t kUsageDesignCapacity       = 0x008E;  // DesignCapacity
 constexpr uint16_t kUsageCycleCount           = 0x008C;  // CycleCount
 constexpr uint16_t kUsageTemperatureBat       = 0x0067;  // Temperature (Battery page)
-constexpr uint16_t kUsageNeedReplacement      = 0x0029;  // NeedReplacement (bit)
+constexpr uint16_t kUsageNeedReplacement      = 0x0029;  // NeedReplacement / RemainingCapacityLimit (0x85/0x29)
+constexpr uint16_t kUsageRemainingCapacityLimit = 0x0029;  // RemainingCapacityLimit (percent threshold)
+constexpr uint16_t kUsageNeedReplacementStd   = 0x002B;  // NeedReplacement (USB HID Power Device 1.12 std)
 constexpr uint16_t kUsageCharging             = 0x0068;  // Charging (bit)
 constexpr uint16_t kUsageDischarging          = 0x0066;  // Discharging (bit)
 

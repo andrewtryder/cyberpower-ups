@@ -1,5 +1,6 @@
 #include "internal/transport.hpp"
 #include "internal/hid_mapping.hpp"
+#include "internal/hid_linux_decode.hpp"
 #include "cyberpower/protocol.hpp"
 
 #include <dirent.h>
@@ -20,10 +21,6 @@
 namespace cyberpower::platform {
 namespace {
 
-uint16_t read_le16(const uint8_t* p) {
-  return static_cast<uint16_t>(p[0] | (static_cast<uint16_t>(p[1]) << 8));
-}
-
 class LinuxHidTransport : public Transport {
  public:
   LinuxHidTransport(int fd, DeviceInfo info) : fd_(fd), info_(std::move(info)) {}
@@ -39,6 +36,15 @@ class LinuxHidTransport : public Transport {
     status.transport = TransportKind::Hid;
     status.ok = true;
 
+    // Safety check: only verified profiles are decoded with fixed report IDs.
+    if (!is_verified_hid_profile(info_.vendor_id, info_.product_id)) {
+      status.ok = false;
+      status.error = Error::NotSupported;
+      status.message = "Device model is unverified for fixed HID report layout (PID " +
+                       std::to_string(info_.product_id) + ")";
+      return status;
+    }
+
     Readings readings;
 
     // Drain any pending input reports first.
@@ -52,107 +58,51 @@ class LinuxHidTransport : public Transport {
     }
 
     // 1. Report 0x0B (ACPresent, Charging, Discharging)
-    uint8_t feat_0b[4] = {0x0B, 0, 0, 0};
-    if (get_feature(feat_0b, 2)) {
-      const uint8_t flags = feat_0b[1];
-      HidElement ac_elem;
-      ac_elem.page = protocol::kPageBattery;
-      ac_elem.usage = 0xD0;
-      map_element(ac_elem, (flags & 0x01) ? 1.0 : 0.0, readings, status);
-
-      HidElement chg_elem;
-      chg_elem.page = protocol::kPageBattery;
-      chg_elem.usage = 0x44;
-      map_element(chg_elem, (flags & 0x02) ? 1.0 : 0.0, readings, status);
-
-      HidElement dis_elem;
-      dis_elem.page = protocol::kPageBattery;
-      dis_elem.usage = 0x45;
-      map_element(dis_elem, (flags & 0x04) ? 1.0 : 0.0, readings, status);
+    uint8_t feat_0b[2];
+    if (get_feature(0x0B, feat_0b, sizeof feat_0b)) {
+      decode_cp1500_report_0b(feat_0b, sizeof feat_0b, readings, status);
     }
 
     // 2. Report 0x08 (Remaining capacity + runtime)
-    uint8_t feat_08[8] = {0x08, 0, 0, 0, 0, 0, 0, 0};
-    if (get_feature(feat_08, 4)) {
-      HidElement rem_elem;
-      rem_elem.page = protocol::kPageBattery;
-      rem_elem.usage = protocol::kUsageDischarging; // 0x66 legacy / percent
-      rem_elem.logical_max = 100;
-      map_element(rem_elem, static_cast<double>(feat_08[1]), readings, status);
-
-      HidElement rt_elem;
-      rt_elem.page = protocol::kPageBattery;
-      rt_elem.usage = protocol::kUsageCharging; // 0x68 legacy runtime
-      rt_elem.logical_max = 65535;
-      const uint16_t rt_val = read_le16(feat_08 + 2);
-      map_element(rt_elem, static_cast<double>(rt_val), readings, status);
+    uint8_t feat_08[4];
+    if (get_feature(0x08, feat_08, sizeof feat_08)) {
+      decode_cp1500_report_08(feat_08, sizeof feat_08, readings, status);
     }
 
     // 3. Report 0x0F (Input Voltage)
-    uint8_t feat_0f[4] = {0x0F, 0, 0, 0};
-    if (get_feature(feat_0f, 3)) {
-      HidElement in_elem;
-      in_elem.page = protocol::kPagePowerDevice;
-      in_elem.usage = protocol::kUsageVoltage;
-      in_elem.ancestors = {{protocol::kPagePowerDevice, 0x1A}};
-      const uint16_t val = read_le16(feat_0f + 1);
-      map_element(in_elem, static_cast<double>(val), readings, status);
+    uint8_t feat_0f[3];
+    if (get_feature(0x0F, feat_0f, sizeof feat_0f)) {
+      decode_cp1500_report_0f(feat_0f, sizeof feat_0f, readings, status);
     }
 
     // 4. Report 0x12 (Output Voltage)
-    uint8_t feat_12[4] = {0x12, 0, 0, 0};
-    if (get_feature(feat_12, 3)) {
-      HidElement out_elem;
-      out_elem.page = protocol::kPagePowerDevice;
-      out_elem.usage = protocol::kUsageVoltage;
-      out_elem.ancestors = {{protocol::kPagePowerDevice, 0x1C}};
-      const uint16_t val = read_le16(feat_12 + 1);
-      map_element(out_elem, static_cast<double>(val), readings, status);
+    uint8_t feat_12[3];
+    if (get_feature(0x12, feat_12, sizeof feat_12)) {
+      decode_cp1500_report_12(feat_12, sizeof feat_12, readings, status);
     }
 
     // 5. Report 0x13 (Load percent)
-    uint8_t feat_13[4] = {0x13, 0, 0, 0};
-    if (get_feature(feat_13, 2)) {
-      HidElement load_elem;
-      load_elem.page = protocol::kPagePowerDevice;
-      load_elem.usage = 0x35;
-      map_element(load_elem, static_cast<double>(feat_13[1]), readings, status);
+    uint8_t feat_13[2];
+    if (get_feature(0x13, feat_13, sizeof feat_13)) {
+      decode_cp1500_report_13(feat_13, sizeof feat_13, readings, status);
     }
 
     // 6. Report 0x0A (Battery Voltage)
-    uint8_t feat_0a[4] = {0x0A, 0, 0, 0};
-    if (get_feature(feat_0a, 3)) {
-      HidElement bat_elem;
-      bat_elem.page = protocol::kPagePowerDevice;
-      bat_elem.usage = protocol::kUsageVoltage;
-      bat_elem.ancestors = {{protocol::kPagePowerDevice, 0x12}};
-      const uint16_t val = read_le16(feat_0a + 1);
-      map_element(bat_elem, static_cast<double>(val) / 10.0, readings, status);
+    uint8_t feat_0a[3];
+    if (get_feature(0x0A, feat_0a, sizeof feat_0a)) {
+      decode_cp1500_report_0a(feat_0a, sizeof feat_0a, readings, status);
     }
 
-    // 7. Report 0x07 (Full charge capacity + cycle count + need replacement)
-    uint8_t feat_07[8] = {0x07, 0, 0, 0, 0, 0, 0, 0};
-    if (get_feature(feat_07, 6)) {
-      HidElement cycle_elem;
-      cycle_elem.page = protocol::kPageBattery;
-      cycle_elem.usage = protocol::kUsageCycleCount;
-      map_element(cycle_elem, static_cast<double>(feat_07[3]), readings, status);
-
-      HidElement need_elem;
-      need_elem.page = protocol::kPageBattery;
-      need_elem.usage = protocol::kUsageNeedReplacement;
-      map_element(need_elem, feat_07[4] ? 1.0 : 0.0, readings, status);
+    // 7. Report 0x07 (Capacity details + cycle count)
+    uint8_t feat_07[7];
+    if (get_feature(0x07, feat_07, sizeof feat_07)) {
+      decode_cp1500_report_07(feat_07, sizeof feat_07, readings, status);
     }
 
     // 8. Vendor 0xFF86 Sensitivity (Report 0x02 on PID 0x0601)
-    uint8_t feat_sens[4] = {0x02, 0, 0, 0};
-    if (get_feature(feat_sens, 2)) {
-      HidElement sens_elem;
-      sens_elem.page = protocol::kPageVendorFf86;
-      sens_elem.usage = protocol::kUsageVendorSensitivityRead;
-      if (feat_sens[1] >= 1 && feat_sens[1] <= 3) {
-        map_element(sens_elem, static_cast<double>(feat_sens[1]), readings, status);
-      }
+    uint8_t feat_sens[2];
+    if (get_feature(0x02, feat_sens, sizeof feat_sens)) {
+      decode_cp1500_report_02(feat_sens, sizeof feat_sens, readings, status);
     }
 
     apply_readings(readings, status);
@@ -174,57 +124,77 @@ class LinuxHidTransport : public Transport {
   }
 
   Error set_alarm_control(int value) override {
+    if (!is_verified_hid_profile(info_.vendor_id, info_.product_id)) {
+      return Error::NotSupported;
+    }
+    if (!is_valid_cp1500_alarm_control(value)) {
+      return Error::ReqParamOutOfRange;
+    }
     uint8_t payload[2] = {protocol::kPid0601AlarmReportId, static_cast<uint8_t>(value)};
     return set_feature(payload, sizeof payload) ? Error::Ok : Error::Io;
   }
 
   Error get_alarm_control(int& value) override {
-    uint8_t payload[2] = {protocol::kPid0601AlarmReportId, 0};
-    if (!get_feature(payload, sizeof payload)) return Error::Io;
+    if (!is_verified_hid_profile(info_.vendor_id, info_.product_id)) {
+      return Error::NotSupported;
+    }
+    uint8_t payload[2];
+    if (!get_feature(protocol::kPid0601AlarmReportId, payload, sizeof payload)) {
+      return Error::Io;
+    }
     value = payload[1];
     return Error::Ok;
   }
 
   Error set_test_mode(int value) override {
+    if (!is_verified_hid_profile(info_.vendor_id, info_.product_id)) {
+      return Error::NotSupported;
+    }
+    if (!is_valid_cp1500_test_mode(value)) {
+      return Error::ReqParamOutOfRange;
+    }
     uint8_t payload[2] = {protocol::kPid0601TestReportId, static_cast<uint8_t>(value)};
     return set_feature(payload, sizeof payload) ? Error::Ok : Error::Io;
   }
 
-  Error set_voltage_sensitivity(int level) override {
-    uint8_t payload[2] = {0x02, static_cast<uint8_t>(level)};
-    return set_feature(payload, sizeof payload) ? Error::Ok : Error::Io;
+  Error set_voltage_sensitivity(int /*level*/) override {
+    // Unverified vendor configuration writes are rejected for safety.
+    return Error::NotSupported;
   }
 
-  Error set_shutdown_delay(int seconds) override {
-    uint8_t payload[3] = {0x04, static_cast<uint8_t>(seconds & 0xFF),
-                          static_cast<uint8_t>((seconds >> 8) & 0xFF)};
-    return set_feature(payload, sizeof payload) ? Error::Ok : Error::Io;
+  Error set_shutdown_delay(int /*seconds*/) override {
+    // Unverified vendor configuration writes are rejected for safety.
+    return Error::NotSupported;
   }
 
-  Error set_restore_delay(int seconds) override {
-    uint8_t payload[3] = {0x05, static_cast<uint8_t>(seconds & 0xFF),
-                          static_cast<uint8_t>((seconds >> 8) & 0xFF)};
-    return set_feature(payload, sizeof payload) ? Error::Ok : Error::Io;
+  Error set_restore_delay(int /*seconds*/) override {
+    // Unverified vendor configuration writes are rejected for safety.
+    return Error::NotSupported;
   }
 
  private:
-  bool get_feature(uint8_t* buf, std::size_t len) {
+  bool get_feature(uint8_t report_id, uint8_t* buf, std::size_t len) {
     if (fd_ < 0 || buf == nullptr || len == 0) return false;
+    std::memset(buf, 0, len);
+    buf[0] = report_id;
     const int rc = ::ioctl(fd_, HIDIOCGFEATURE(len), buf);
-    if (raw_dump_sink() != nullptr && rc >= 0) {
+    const bool valid = validate_feature_report(buf, rc, report_id, len);
+    if (raw_dump_sink() != nullptr) {
       char line[96];
-      std::snprintf(line, sizeof line, "hidraw get_feature id=0x%02x len=%zu ok", buf[0], len);
+      std::snprintf(line, sizeof line, "hidraw get_feature id=0x%02x len=%zu %s (rc=%d)",
+                    report_id, len, valid ? "ok" : "failed", rc);
       dump_raw_line(line);
     }
-    return rc >= 0;
+    return valid;
   }
 
   bool set_feature(const uint8_t* buf, std::size_t len) {
     if (fd_ < 0 || buf == nullptr || len == 0) return false;
-    const int rc = ::ioctl(fd_, HIDIOCSFEATURE(len), buf);
+    const int rc = ::ioctl(fd_, HIDIOCSFEATURE(len), const_cast<uint8_t*>(buf));
     if (raw_dump_sink() != nullptr) {
       char line[96];
-      std::snprintf(line, sizeof line, "hidraw set_feature id=0x%02x len=%zu rc=%d", buf[0], len, rc);
+      std::snprintf(line, sizeof line, "hidraw set_feature id=0x%02x len=%zu %s (rc=%d)",
+                    buf[0], len, rc >= 0 ? "ok" : "failed", rc);
       dump_raw_line(line);
     }
     return rc >= 0;
