@@ -1,0 +1,5 @@
+# CyberPower Systems UPS devices (USB HID)
+# Grants read/write access to local active session user (systemd uaccess)
+# and members of the plugdev group.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0764", MODE="0660", TAG+="uaccess", GROUP="plugdev"
+

@@ -177,9 +177,37 @@ Usages used for the status snapshot (page/usage High; English names from the USB
 | `0x85` | `0x8D` | FullChargeCapacity | High |
 | `0x85` | `0x8E` | DesignCapacity | High |
 | `0x85` | `0x67` | Temperature (Battery System; overwrites `0x84/0x36`) | High |
-| `0x85` | `0x29` | NeedReplacement (bit) | High |
+| `0x85` | `0x4B` | NeedReplacement (Standard USB-IF HID Power Device 1.12 usage) | High |
+| `0x85` | `0x29` | RemainingCapacityLimit (percent / capacity threshold) | High |
+| `0x85` | `0x2B` | AtRate (instantaneous current rate) | High |
 | `0x85` | `0x68` | Charging (**RE-confirmed**) | High |
 | `0x85` | `0x66` | Discharging (**RE-confirmed**) | High |
+
+> [!NOTE]
+> **Battery Replacement Disambiguation (0x4B vs 0x29 / 0x2B)**:
+> In the USB-IF HID Power Device 1.12 specification:
+> - `0x85/0x4B` is `NeedReplacement` (a 1-bit boolean flag indicating battery replacement is required).
+> - `0x85/0x29` is `RemainingCapacityLimit` (a percentage threshold integer, e.g. 10% or 20%).
+> - `0x85/0x2B` is `AtRate`.
+> On hardware such as the CP1500PFCLCDa, Feature Report `0x07` byte 4 contains `20` (the low-capacity limit threshold), not a boolean replacement fault. Neither `0x29` nor `0x2B` should ever be interpreted as `NeedReplacement`.
+> This library maps `0x85/0x4B` to `need_replacement` when boolean flags are parsed. Report `0x07` on CP1500PFCLCDa is decoded directly as capacity and cycle count, leaving `need_replacement` absent unless a verified `0x4B` indicator is present.
+
+### Linux hidraw Feature Reports (CP1500PFCLCDa Profile)
+
+On Linux via `hidraw`, reading status without a full descriptor parser uses validated Feature report transfers matching the verified CP1500PFCLCDa (VID `0x0764`, PID `0x0601`) layout:
+
+| Report ID | Size | Fields Decoded |
+| --- | --- | --- |
+| `0x0B` | 2 bytes | Input AC Present flag (byte 1, bit 0), Charging (bit 1), Discharging (bit 2) |
+| `0x08` | 4 bytes | Battery remaining % (byte 1), Runtime to empty (16-bit LE, bytes 2..3, seconds) |
+| `0x0F` | 3 bytes | Input AC voltage (16-bit LE, 1 V units) |
+| `0x12` | 3 bytes | Output AC voltage (16-bit LE, 1 V units) |
+| `0x13` | 2 bytes | Output load % (byte 1) |
+| `0x0A` | 3 bytes | Battery pack voltage (16-bit LE, 0.1 V units) |
+| `0x07` | 7 bytes | Battery info: byte 1 = capacity %, bytes 4/5 = thresholds, byte 6 = cycle count |
+| `0x02` | 2 bytes | Sensitivity level (byte 1: 1=High, 2=Medium, 3=Low) |
+
+All feature report reads on Linux validate that the returned report ID matches the request and the byte length meets or exceeds the required payload size. Unsupported device models return `Error::NotSupported`.
 
 ### Battery System page (0x85) — older / alternative usages (kept for firmware compat)
 

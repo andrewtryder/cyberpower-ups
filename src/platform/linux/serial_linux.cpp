@@ -1,5 +1,6 @@
 #include "internal/transport.hpp"
 #include "internal/serial_discovery.hpp"
+#include "internal/serial_posix.hpp"
 #include "internal/serial_write.hpp"
 
 #include "cyberpower/protocol.hpp"
@@ -20,16 +21,6 @@
 
 namespace cyberpower::platform {
 namespace {
-
-speed_t posix_baud(int baud) {
-  switch (baud) {
-    case 1200: return B1200;
-    case 2400: return B2400;
-    case 4800: return B4800;
-    case 9600: return B9600;
-    default: return 0;
-  }
-}
 
 class LinuxSerialTransport : public Transport {
  public:
@@ -157,10 +148,6 @@ std::vector<DeviceInfo> list_serial() {
   while (dirent* ent = ::readdir(dir)) {
     const std::string name = ent->d_name;
     if (!serial_port_name_is_candidate(name, include_generic)) continue;
-    if (name.compare(0, 6, "ttyUSB") != 0 && name.compare(0, 4, "ttyS") != 0 &&
-        name.compare(0, 6, "ttyACM") != 0 && name.compare(0, 14, "cu.wchusbserial") != 0) {
-      continue;
-    }
     DeviceInfo info;
     info.transport = TransportKind::Serial;
     info.path = std::string("/dev/") + name;
@@ -183,16 +170,7 @@ std::unique_ptr<Transport> open_serial(const DeviceInfo& info, std::string& erro
     ::close(fd);
     return nullptr;
   }
-  cfmakeraw(&tio);
-  tio.c_iflag = protocol::kTermiosIflag;
-  tio.c_oflag = 0;
-  tio.c_lflag = 0;
-  tio.c_cflag = static_cast<tcflag_t>(protocol::kTermiosCflag);
-  tio.c_cc[VMIN] = 0;
-  tio.c_cc[VTIME] = 0;
-  const speed_t speed = posix_baud(protocol::kDefaultBaud);
-  if (speed == 0 || cfsetispeed(&tio, speed) != 0 || cfsetospeed(&tio, speed) != 0) {
-    error = "unsupported baud";
+  if (!configure_posix_termios(tio, protocol::kDefaultBaud, error)) {
     ::close(fd);
     return nullptr;
   }

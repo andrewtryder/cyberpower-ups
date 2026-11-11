@@ -52,6 +52,10 @@ set_target_properties(cyberpower-ups PROPERTIES
   OUTPUT_NAME cyberpower-ups
 )
 
+if(UNIX)
+  target_sources(cyberpower-ups PRIVATE src/serial_posix.cpp)
+endif()
+
 if(APPLE)
   target_sources(cyberpower-ups PRIVATE
     src/platform/macos/hid_macos.cpp
@@ -61,8 +65,9 @@ if(APPLE)
     "-framework IOKit"
     "-framework CoreFoundation"
   )
-elseif(UNIX)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_sources(cyberpower-ups PRIVATE
+    src/hid_linux_decode.cpp
     src/platform/linux/hid_linux.cpp
     src/platform/linux/serial_linux.cpp
   )
@@ -74,6 +79,8 @@ endif()
 
 if(APPLE)
   set(PC_PLATFORM_LIBS "-framework IOKit -framework CoreFoundation")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(PC_PLATFORM_LIBS "-lstdc++")
 else()
   set(PC_PLATFORM_LIBS "")
 endif()
@@ -92,6 +99,9 @@ target_link_libraries(list_and_status PRIVATE cyberpower-ups)
 include(CTest)
 if(BUILD_TESTING)
   add_executable(offline_test tests/offline_test.cpp)
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(offline_test PRIVATE src/hid_linux_decode.cpp)
+  endif()
   target_link_libraries(offline_test PRIVATE cyberpower-ups)
   target_include_directories(offline_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   add_test(NAME offline_test COMMAND offline_test)
@@ -154,3 +164,9 @@ configure_file(
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/cyberpower-ups.pc
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
 )
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/udev/99-cyberpower-ups.rules
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/udev/rules.d
+  )
+endif()

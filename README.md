@@ -6,7 +6,7 @@ A modern C++17 library and command-line tool for talking to CyberPower UPS devic
 
 Official **PowerPanel Personal** ships a native driver, `libppbedrvc.dylib`, that is **x86_64-only** — not a native Apple Silicon / arm64 binary. On Apple Silicon Macs that forces Rosetta (or leaves you without a clean native stack) for direct USB HID and serial access to the UPS.
 
-**cyberpower-ups** was built by reverse-engineering that driver so there is a **native C++17 library and CLI** that talks to the hardware directly: no dependency on the proprietary dylib, and no Rosetta required for this code path. It works today on macOS (IOKit HID + termios); Windows / Linux builds compile against a transport stub while the platform layer stays isolated.
+**cyberpower-ups** was built by reverse-engineering that driver so there is a **native C++17 library and CLI** that talks to the hardware directly: no dependency on the proprietary dylib, and no Rosetta required for this code path. It works today on **macOS** (IOKit HID + termios) and **Linux** (`/dev/hidraw*` + termios); Windows builds compile against a transport stub while the platform layer stays isolated.
 
 This project is independent and **not affiliated with** Cyber Power Systems. See [License & Disclaimer](#license--disclaimer).
 
@@ -98,7 +98,7 @@ make install
 # or:
 cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr/local
 cmake --build build
-cmake --install build
+sudo cmake --install build
 ```
 
 This installs:
@@ -108,6 +108,64 @@ This installs:
 - the `cpups` binary
 - CMake package config under `lib/cmake/cyberpower-ups/`
 - pkg-config file `lib/pkgconfig/cyberpower-ups.pc`
+- on Linux: udev rule under `lib/udev/rules.d/99-cyberpower-ups.rules` (grants access to `/dev/hidraw*` devices for local active console users)
+
+---
+
+## Linux Support & Hardware Validation
+
+Linux support uses the native kernel `hidraw` interface for USB HID devices and POSIX `termios` for serial ports.
+
+### Hardware Validation
+- **Environment**: Ubuntu 24.04 LTS (kernel 6.8, GCC 13.3.0).
+- **Verified Hardware**: CyberPower CP1500PFCLCDa (USB VID `0x0764`, PID `0x0601`).
+- **Verified HID Status Readings**:
+  - Battery capacity (%)
+  - Input & output AC voltage (V)
+  - Output load (%)
+  - Remaining runtime (seconds)
+  - AC line presence, charging, and discharging flags
+  - Battery pack voltage (V) and cycle count
+  - Voltage sensitivity level (Medium / Normal)
+
+### Verified vs. Experimental Controls
+- **Verified Write Support**:
+  - Audible alarm control (Mute, Enable, Disable) via Feature Report `0x0C` (VID `0x0764`, PID `0x0601`).
+  - Battery quick self-test and test abort via Feature Report `0x14` (VID `0x0764`, PID `0x0601`).
+  - All input parameters are strictly validated (`1..3`); out-of-range values return `Error::ReqParamOutOfRange`.
+- **Safety Policy for Unverified Models**:
+  - Unverified HID models or unsupported product IDs return `Error::NotSupported` rather than guessing report offsets.
+  - Speculative vendor configuration writes (`set_voltage_sensitivity`, `set_shutdown_delay`, `set_restore_delay`) are rejected on Linux `hidraw` with `Error::NotSupported` pending full runtime descriptor parsing.
+  - > [!WARNING]
+    > **Do not execute unverified control operations against production UPS equipment.** Testing or configuration writes should only be run against verified devices in non-critical environments.
+
+### Linux `hidraw` Device Permissions (udev)
+By default, `/dev/hidraw*` device nodes are owned by `root:root` with mode `0600`. To allow non-root users (or the active desktop session) to read UPS status, install the provided udev rule:
+
+```bash
+sudo cp udev/99-cyberpower-ups.rules /etc/udev/rules.d/
+sudo udevadm control --reload
+sudo udevadm trigger
+```
+
+The rule tags CyberPower USB devices (`ATTRS{idVendor}=="0764"`) with `TAG+="uaccess"`, giving the currently logged-in desktop user read/write access to the device node.
+
+### Serial Discovery Safety & Opt-in
+On Linux, generic serial ports (`/dev/ttyS*`, `/dev/ttyUSB*`, `/dev/ttyACM*`) are **not** probed by default during automatic device discovery. This prevents transmitting `D\r` or serial control strings to unrelated peripherals, modems, or motherboards.
+
+To explicitly probe generic serial ports, set `CPUPS_INCLUDE_GENERIC_SERIAL=1`:
+```bash
+CPUPS_INCLUDE_GENERIC_SERIAL=1 cpups
+```
+Driver-specific names recognized by the original driver (such as `wchusbserial`) are always discovered safely.
+
+### Linux POSIX Termios Serial Configuration
+Serial communication on Linux is configured using standard POSIX `termios` flags:
+- Raw mode (`cfmakeraw`)
+- 2400 baud default
+- 8 data bits, no parity, 1 stop bit (8N1)
+- `CLOCAL | CREAD` (local line, receiver enabled)
+- Nonblocking read polling (`VMIN = 0`, `VTIME = 0`)
 
 ---
 

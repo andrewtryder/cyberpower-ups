@@ -59,18 +59,39 @@ constexpr int kTestAbort = 3;
 constexpr uint8_t kPid0601AlarmReportId = 0x0C;
 constexpr uint8_t kPid0601TestReportId = 0x14;
 constexpr uint16_t kPidCp1500Pfclcda = 0x0601;
+constexpr uint16_t kPid0601 = 0x0601;
 
 // ---------------------------------------------------------------------------
-// Battery System (0x85) usages recovered from UsageMapping::Initialize. High.
+// Battery System (0x85) usages.
+//
+// USB-IF Power Device 1.12 standard vs CyberPower internal mappings:
+// - Standard USB-IF / Apple definitions:
+//     0x85/0x29 = RemainingCapacityLimit (capacity/percent threshold)
+//     0x85/0x2B = AtRate
+//     0x85/0x4B = NeedReplacement (1-bit boolean flag)
+//     0x85/0x44 = Charging (flag)
+//     0x85/0x45 = Discharging (flag)
+// - Recovered CyberPower driver (UsageMapping::Initialize) internal mappings:
+//     0x85/0x2C = RemainingCapacity
+//     0x85/0x8B = RunTimeToEmpty
+//     0x85/0x8C = CycleCount
+//     0x85/0x8D = FullChargeCapacity
+//     0x85/0x8E = DesignCapacity
+//     0x85/0x67 = Temperature (unless logical max indicates legacy capacity)
+//     0x85/0x68 = Charging (or legacy runtime if logical max > 1)
+//     0x85/0x66 = Discharging (or legacy capacity if logical max > 1)
 // ---------------------------------------------------------------------------
 
-constexpr uint16_t kUsageRemainingCapacity    = 0x002C;  // RemainingCapacity (percent or raw)
-constexpr uint16_t kUsageRunTimeToEmpty       = 0x008B;  // RunTimeToEmpty (seconds)
-constexpr uint16_t kUsageFullChargeCapacity   = 0x008D;  // FullChargeCapacity
-constexpr uint16_t kUsageDesignCapacity       = 0x008E;  // DesignCapacity
-constexpr uint16_t kUsageCycleCount           = 0x008C;  // CycleCount
+constexpr uint16_t kUsageRemainingCapacity    = 0x002C;  // RemainingCapacity (driver mapped)
+constexpr uint16_t kUsageRunTimeToEmpty       = 0x008B;  // RunTimeToEmpty (driver mapped, seconds)
+constexpr uint16_t kUsageFullChargeCapacity   = 0x008D;  // FullChargeCapacity (driver mapped)
+constexpr uint16_t kUsageDesignCapacity       = 0x008E;  // DesignCapacity (driver mapped)
+constexpr uint16_t kUsageCycleCount           = 0x008C;  // CycleCount (driver mapped)
 constexpr uint16_t kUsageTemperatureBat       = 0x0067;  // Temperature (Battery page)
-constexpr uint16_t kUsageNeedReplacement      = 0x0029;  // NeedReplacement (bit)
+constexpr uint16_t kUsageNeedReplacement      = 0x004B;  // NeedReplacement (USB-IF standard 0x85/0x4B)
+constexpr uint16_t kUsageNeedReplacementStd   = 0x004B;  // NeedReplacement standard alias
+constexpr uint16_t kUsageRemainingCapacityLimit = 0x0029;  // RemainingCapacityLimit (0x85/0x29)
+constexpr uint16_t kUsageAtRate               = 0x002B;  // AtRate (0x85/0x2B)
 constexpr uint16_t kUsageCharging             = 0x0068;  // Charging (bit)
 constexpr uint16_t kUsageDischarging          = 0x0066;  // Discharging (bit)
 

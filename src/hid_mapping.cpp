@@ -77,9 +77,13 @@ const char* map_battery(const HidElement& element, uint32_t usage, double value,
     }
     case protocol::kUsageCycleCount:
       r.cycle_count = value; return "cycle_count(8C)";
-    case protocol::kUsageNeedReplacement:
-      if (is_flag(value)) { r.need_replacement = value != 0.0; return "need_repl(29)"; }
+    case protocol::kUsageNeedReplacement:  // 0x4B (USB-IF standard 1-bit flag)
+      if (is_flag(value)) { r.need_replacement = value != 0.0; return "need_repl(4B)"; }
       return nullptr;
+    case protocol::kUsageRemainingCapacityLimit:  // 0x29 (RemainingCapacityLimit, percent threshold)
+      return "remain_cap_limit(29)";
+    case protocol::kUsageAtRate:  // 0x2B (AtRate)
+      return "at_rate(2B)";
     case protocol::kUsageCharging: {  // 0x68
       const bool legacy_numeric = element.logical_max > 1;
       if (legacy_numeric) { r.runtime = value; return "runtime(68_legacy)"; }
