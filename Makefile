@@ -55,6 +55,7 @@ format:
 
 check-format:
 	./scripts/check-format.sh origin/main
+	python3 tests/test_check_format.py
 
 lint:
 	actionlint

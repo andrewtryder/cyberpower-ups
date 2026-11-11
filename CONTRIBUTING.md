@@ -42,15 +42,16 @@ You can test a PR title locally using:
 
 ## 2. Code Formatting (`clang-format`)
 
-C and C++ files follow the `.clang-format` configuration (Google-based C++17 style with 2-space indentation and 100-column limit).
+C and C++ files follow the `.clang-format` configuration (Google-based C++17 style with 2-space indentation and 100-column limit). The standardized version used in CI is **21.1.8** (`pip install clang-format==21.1.8` or via your package manager).
 
-Enforcement in CI is **incremental**: only the lines and files modified in your pull request relative to `origin/main` are checked. This prevents unrelated formatting churn across the existing codebase.
+Enforcement in CI is **incremental**: only the lines and files modified in your pull request relative to `origin/main` are checked across `include`, `src`, `tools`, `examples`, and `tests`. This prevents unrelated formatting churn across the existing codebase while ensuring newly authored or edited lines conform to style.
 
 ### Check Formatting Locally
 ```bash
 make check-format
 # or directly:
 ./scripts/check-format.sh origin/main
+python3 tests/test_check_format.py
 ```
 
 ### Automatically Format Changed Lines

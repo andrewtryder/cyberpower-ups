@@ -16,18 +16,43 @@ fi
 
 echo "Checking C/C++ code formatting against ${BASE_REF}..."
 
-# Run git-clang-format in diff mode.
-DIFF_OUTPUT="$(git-clang-format --diff "${BASE_REF}" -- 'include/**/*.hpp' 'include/**/*.h' 'src/**/*.cpp' 'src/**/*.hpp' 'tools/**/*.cpp' 'examples/**/*.cpp' 'tests/**/*.cpp')"
+# Source directories to check. Passing directories directly ensures files
+# directly within them (e.g. src/hid_mapping.cpp, tools/cpups.cpp, tests/offline_test.cpp)
+# as well as nested files are covered.
+DIRS=()
+for d in include src tools examples tests; do
+  if [ -d "$d" ]; then
+    DIRS+=("$d")
+  fi
+done
 
-if [ -n "${DIFF_OUTPUT}" ] && [ "${DIFF_OUTPUT}" != "no modified files to format" ]; then
+if [ ${#DIRS[@]} -eq 0 ]; then
+  echo "OK: No source directories found to check."
+  exit 0
+fi
+
+# Run git-clang-format with --quiet and --diff.
+# --quiet suppresses informational messages ("no modified files to format", "clang-format did not modify any files")
+# while outputting only genuine diff content if violations exist.
+# We also filter out any lingering informational lines for safety across git-clang-format versions.
+set +e
+RAW_OUTPUT="$(git-clang-format --quiet --diff "${BASE_REF}" --extensions c,h,cpp,hpp -- "${DIRS[@]}" 2>&1)"
+FORMAT_STATUS=$?
+set -e
+
+# Strip known informational notices if emitted by some git-clang-format implementations
+DIFF_OUTPUT="$(echo "${RAW_OUTPUT}" | grep -v -E '^(no modified files to format|clang-format did not modify any files)$' || true)"
+
+if [ ${FORMAT_STATUS} -ne 0 ] || [ -n "${DIFF_OUTPUT}" ]; then
   echo "ERROR: Formatting violations detected against ${BASE_REF}!" >&2
   echo "" >&2
-  echo "${DIFF_OUTPUT}" >&2
-  echo "" >&2
+  if [ -n "${DIFF_OUTPUT}" ]; then
+    echo "${DIFF_OUTPUT}" >&2
+    echo "" >&2
+  fi
   echo "To automatically format your changed lines, run:" >&2
-  echo "  git-clang-format ${BASE_REF}" >&2
+  echo "  git-clang-format ${BASE_REF} -- ${DIRS[*]}" >&2
   exit 1
 fi
 
 echo "OK: No formatting violations found in changed files."
-

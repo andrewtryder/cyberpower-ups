@@ -14,7 +14,7 @@ jobs:
     name: Actionlint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -50,19 +50,23 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
 
-      - name: Install clang-format
+      - name: Install standardized clang-format (21.1.8)
         run: |
-          if ! command -v git-clang-format >/dev/null 2>&1; then
-            sudo apt-get update && sudo apt-get install -y clang-format
-          fi
+          pipx install --force "clang-format==21.1.8" || pip3 install --break-system-packages "clang-format==21.1.8"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Verify clang-format version
-        run: clang-format --version
+        run: |
+          clang-format --version
+          git-clang-format -h >/dev/null
+
+      - name: Run formatting gate regression tests
+        run: python3 tests/test_check_format.py
 
       - name: Check code formatting
         env:
@@ -73,7 +77,7 @@ jobs:
     name: Zizmor security audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
