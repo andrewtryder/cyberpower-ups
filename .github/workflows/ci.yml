@@ -94,3 +94,54 @@ jobs:
           # shellcheck disable=SC2046
           c++ consumer-c-api.o $(pkg-config --libs cyberpower-ups) -o consumer-c-api
           ./consumer-c-api
+
+  sanitizers:
+    name: Linux ASan + UBSan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build tools
+        run: |
+          if ! command -v cmake >/dev/null 2>&1 || ! command -v g++ >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y cmake g++
+          fi
+
+      - name: Configure with Sanitizers
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCYBERPOWER_ENABLE_WARNINGS=ON -DCYBERPOWER_ENABLE_SANITIZERS=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Protocol self-test
+        run: ./build/cpups --self-test
+
+      - name: CTest offline
+        run: ctest --test-dir build --output-on-failure
+
+  windows:
+    name: Windows build + portable tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCYBERPOWER_ENABLE_WARNINGS=ON
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Protocol self-test
+        run: |
+          if (Test-Path .\build\Release\cpups.exe) {
+            .\build\Release\cpups.exe --self-test
+          } else {
+            .\build\cpups.exe --self-test
+          }
+
+      - name: CTest offline
+        run: ctest --test-dir build --output-on-failure -C Release

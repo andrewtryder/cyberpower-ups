@@ -1,5 +1,18 @@
 #include "internal/serial_write.hpp"
 
+#ifdef _WIN32
+
+namespace cyberpower::platform {
+
+Error write_all_nonblocking(int /*fd*/, const char* /*data*/, std::size_t /*size*/,
+                            int /*timeout_ms*/) {
+  return Error::NotSupported;
+}
+
+}  // namespace cyberpower::platform
+
+#else
+
 #include <cerrno>
 #include <chrono>
 #include <poll.h>
@@ -37,3 +50,5 @@ Error write_all_nonblocking(int fd, const char* data, std::size_t size, int time
 }
 
 }  // namespace cyberpower::platform
+
+#endif
