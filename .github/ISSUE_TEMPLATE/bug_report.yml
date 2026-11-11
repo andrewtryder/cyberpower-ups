@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thank you for reporting an issue! Please review [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md) and ensure all diagnostic logs are sanitized of serial numbers or identifying data before submitting.
+        Thank you for reporting an issue! Please review [CONTRIBUTING.md](https://github.com/andrewtryder/cyberpower-ups/blob/main/CONTRIBUTING.md) and ensure all diagnostic logs are sanitized of serial numbers or identifying data before submitting.
   - type: input
     id: device_model
     attributes:
